@@ -9,7 +9,7 @@ import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { CallId } from '@deepseek-ai/dsh-llm'
-import type { Config } from '@deepseek-ai/dsh-mcp-client'
+import type { DirectConfig, ReconnectConfig } from '@deepseek-ai/dsh-mcp-client'
 
 // ---- Mock MCP SDK ----
 
@@ -92,7 +92,7 @@ function captureLogs(ctx: Context): { warns: string[]; errors: string[]; infos: 
   return { warns, errors, infos }
 }
 
-function stdioConfig(reconnect?: Config['reconnect']): Config {
+function stdioConfig(reconnect?: ReconnectConfig): DirectConfig {
   return {
     transport: 'stdio',
     serverName: 'srv',

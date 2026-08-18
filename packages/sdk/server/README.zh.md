@@ -6,7 +6,7 @@
 
 ## 组装
 
-`inject: ['agents']`。服务器按 `sessionId` 获取或创建一个 agent。只有服务对生命周期建立快照时记录的 `local` 标志为 true，服务器才会转发 subagent 完成事件；提供方名称、子级 id 和持久化谱系均不能证明本地性。已注册的适配器优先；尚无适配器负责的 `deepseek-official` 路由会挂载 `dsh-llm-deepseek`，任何其他尚无适配器负责的提供方都会导致初始化失败。其他能力由外围 `cordis.yml` 提供。
+`inject: ['agents']`。服务器按 `sessionId` 获取或创建一个 agent。显式 `session/open` 会在发布前组合 Agent；只需要部署默认值的调用方仍可通过 `session/prompt` 延迟创建。只有服务对生命周期建立快照时记录的 `local` 标志为 true，服务器才会转发 subagent 完成事件；提供方名称、子级 id 和持久化谱系均不能证明本地性。已注册的适配器优先；尚无适配器负责的 `deepseek-official` 路由会挂载 `dsh-llm-deepseek`，任何其他尚无适配器负责的提供方都会导致初始化失败。其他能力由外围 `cordis.yml` 提供。
 
 ## 配置
 
@@ -22,7 +22,9 @@ Stdout 只承载 JSON-RPC 帧。部署不得组合 stdout logger；诊断应写�
 
 ## 协议说明
 
-`initialize.serverInfo.name` 的协议稳定值为 `deepseek-harness-sdk-runtime`。可选的正整数 `initialize.maxTokens` 会成为每个 SDK 创建的 agent 及其进程内后代的请求输出上限；非法值会使初始化失败，省略时则不发送 SDK 上限，并应用所选适配器或提供方路由的默认值。`session/prompt` 将一条带标识的用户消息排入队列，并立即返回 `{ messageId }`。服务器将每个持久事实作为 `session.event` 流式发出，并将整个 agent 生命周期的每次状态转换作为 `session.status` 发出；它不会把某条助手消息或 `turn/end` 归属于该提示词。同一会话上的独立请求可以继续排入更多工作。持久化根目录和 persona 由 `cordis.yml` 提供。
+`initialize.serverInfo.name` 的协议稳定值为 `deepseek-harness-sdk-runtime`。可选的正整数 `maxTokens` 与非空 `reasoningEffort` 成为进程默认值。`session/open` 可覆盖提供方、模型、输出上限与推理强度；安装精确的 agent 作用域系统提示词；限制继承／全局工具；附加以对象为根的 JSON Schema；并创建或恢复具名持久会话。工具运行时会校验限制：未知全局名称令会话创建失败，而 Schema 绑定的 `structured_output` 工具保留在会话本地，因此在显式允许列表下仍然可用。
+
+`session/prompt`、`session/steer` 与 `session/inject` 都返回持久 `{ messageId }` 回执。prompt 与 steer 会唤醒目标，inject 不会唤醒空闲 Agent。`session/cancel` 中止一个 Agent，并可选择保留其 inbox。`session/output` 读取已提交且通过 Schema 校验的值，`session/close` 则只移除并释放一个受管 Agent，不影响同级会话。服务器将每个持久事实作为 `session.event` 流式发出，并将整个 agent 生命周期的每次状态转换作为 `session.status` 发出；它不会把某条助手消息或 `turn/end` 归属于一条入队回执。持久化根目录和基础 persona 仍由 `cordis.yml` 提供。
 
 ## 模型体验
 
@@ -40,9 +42,22 @@ Stdout 只承载 JSON-RPC 帧。部署不得组合 stdout logger；诊断应写�
 
 仅追加；新可见内容位于可复用请求前缀之后，不会使现有 KV Cache 条目失效。
 
+### 每会话组合
+
+#### 模型看到的内容
+
+提供 `session/open.systemPrompt` 时，它会替换该 Agent 的部署 persona 段。`allowedTools` 移除未列出的继承／全局工具 Schema 与执行能力。`outputSchema` 添加作用域内 `structured_output` Schema 及其完成指令；成功调用会结束轮次，并让校验后的值只能经 `session/output` 读取。
+
+#### Token 影响
+
+选定的系统提示词、保留下来的工具 Schema，以及可选的结构化输出指令／Schema，是每会话固定的请求前缀成本。用户、助手与工具结果内容仍是依数据而定的持久历史。
+
+#### KV Cache 影响
+
+对同一会话的后续步骤保持稳定。更改 persona、工具、模型选择、推理强度或输出 Schema 需要打开不同组合的 Agent，并可能使受影响的前缀失效。
+
 ## 已知限制与暂缓事项
 
-- **协议没有逐会话关闭或提示词取消方法**：SDK 创建的 agent 会一直存活到进程关闭。
 - **没有逐提示词结果**：`MessageId` 只标识 inbox 准入；拥有自动化活动区间的客户端必须自行定义并观察该区间。
 - **stdout 纯净性由部署保证**：外围配置仍可能加载 stdout logger 并破坏 JSON-RPC 通道；此插件不会检查或否决同级 logger。
 - **自动挂载适配器仅支持 DeepSeek**：`initialize` 可以复用任何预先注册的模型适配器，但唯一的回退行为是挂载 `dsh-llm-deepseek`。

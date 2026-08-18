@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from deepseek_harness import DeepSeekHarness, HarnessClient, HarnessConfig, Notification, SdkProtocolError
+from deepseek_harness import (
+    DeepSeekHarness,
+    HarnessClient,
+    HarnessConfig,
+    Notification,
+    SdkProtocolError,
+    SessionConfig,
+)
 
 
 def test_high_level_sdk_runs_turn_and_collects_final_response(tmp_path: Path) -> None:
@@ -94,6 +101,7 @@ for line in sys.stdin:
     with DeepSeekHarness(
         model="deepseek-v4-flash",
         max_tokens=4096,
+        reasoning_effort="high",
         cwd=str(tmp_path),
         cordis=str(tmp_path / "cordis.yml"),
         session_root=str(tmp_path / "sessions"),
@@ -121,7 +129,72 @@ for line in sys.stdin:
         "provider": "deepseek-official",
         "model": "deepseek-v4-flash",
         "maxTokens": 4096,
+        "reasoningEffort": "high",
     }
+
+
+def test_high_level_session_controls_and_structured_output(tmp_path: Path) -> None:
+    script = tmp_path / "controlled_runtime.py"
+    script.write_text(
+        """
+import json
+import sys
+
+opened = set()
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    params = msg.get("params") or {}
+    if method == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"serverInfo": {"name": "fake-runtime"}}}), flush=True)
+    elif method == "session/open":
+        opened.add(params["sessionId"])
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"sessionId": params["sessionId"], "disposition": "resumed" if params.get("resume") else "created"}}), flush=True)
+    elif method == "session/prompt":
+        session_id = params["sessionId"]
+        print(json.dumps({"jsonrpc": "2.0", "method": "session.event", "params": {"sessionId": session_id, "event": {"type": "agent/inbox/spliced", "data": {"target": "next-turn", "start": 0, "inserted": [{"id": "message-1"}]}}}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "method": "session.status", "params": {"sessionId": session_id, "status": "running"}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"messageId": "message-1"}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "method": "session.event", "params": {"sessionId": session_id, "event": {"type": "assistant/message", "data": {"message": {"content": [{"type": "text", "text": "structured"}]}}}}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "method": "session.status", "params": {"sessionId": session_id, "status": "idle"}}), flush=True)
+    elif method in {"session/steer", "session/inject"}:
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"messageId": method}}), flush=True)
+    elif method == "session/cancel":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
+    elif method == "session/output":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"available": True, "structuredOutput": {"answer": 42}}}), flush=True)
+    elif method == "session/close":
+        closed = params["sessionId"] in opened
+        opened.discard(params["sessionId"])
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"closed": closed}}), flush=True)
+    elif method == "shutdown":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
+        break
+""".strip()
+    )
+
+    config = SessionConfig(
+        resume=True,
+        provider="route",
+        model="model",
+        max_tokens=2048,
+        reasoning_effort="max",
+        system_prompt="exact prompt",
+        allowed_tools=[],
+        output_schema={"type": "object", "properties": {"answer": {"type": "number"}}},
+    )
+    with DeepSeekHarness(launch_args_override=(sys.executable, str(script)), cwd=str(tmp_path)) as harness:
+        session = harness.start_session("controlled", config=config)
+        result = session.run("produce json")
+        assert session.steer("change").startswith("session/steer")
+        assert session.inject("context").startswith("session/inject")
+        session.cancel(keep_inbox=True)
+        assert session.output().structuredOutput == {"answer": 42}
+        assert session.close() is True
+        assert session.close() is False
+
+    assert result.final_response == "structured"
+    assert result.structured_output == {"answer": 42}
 
 
 def test_session_run_invokes_notification_callback_before_returning(tmp_path: Path) -> None:

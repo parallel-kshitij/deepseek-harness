@@ -7,7 +7,7 @@ from typing import Callable
 
 from .client import HarnessClient, HarnessConfig
 from .errors import SdkProtocolError
-from .models import JsonObject, Notification
+from .models import JsonObject, JsonValue, Notification, SessionOutputResponse
 
 
 @dataclass(slots=True)
@@ -22,6 +22,7 @@ class DeepSeekHarnessConfig:
     provider: str = "deepseek-official"
     model: str = "deepseek-v4-flash"
     max_tokens: int | None = None
+    reasoning_effort: str | None = None
     cwd: str | None = None
     runtime_cwd: str | None = None
     session_root: str | None = None
@@ -43,6 +44,21 @@ class RunResult:
     events: list[JsonObject]
     notifications: list[Notification]
     session_root: str | None = None
+    structured_output: JsonValue = None
+
+
+@dataclass(slots=True)
+class SessionConfig:
+    """Per-session route and scoped composition applied before publication."""
+
+    resume: bool = False
+    provider: str | None = None
+    model: str | None = None
+    max_tokens: int | None = None
+    reasoning_effort: str | None = None
+    system_prompt: str | None = None
+    allowed_tools: list[str] | None = None
+    output_schema: JsonObject | None = None
 
 
 class DeepSeekHarness:
@@ -103,6 +119,7 @@ class DeepSeekHarness:
             provider=self.config.provider,
             model=self.config.model,
             max_tokens=self.config.max_tokens,
+            reasoning_effort=self.config.reasoning_effort,
         )
         self._initialized = True
 
@@ -110,9 +127,14 @@ class DeepSeekHarness:
         self._client.close()
         self._initialized = False
 
-    def start_session(self, session_id: str | None = None) -> "Session":
+    def start_session(
+        self,
+        session_id: str | None = None,
+        *,
+        config: SessionConfig | None = None,
+    ) -> "Session":
         self.start()
-        return Session(self, session_id or f"session-{uuid.uuid4().hex}")
+        return Session(self, session_id or f"session-{uuid.uuid4().hex}", config=config)
 
     def run(
         self,
@@ -120,14 +142,58 @@ class DeepSeekHarness:
         *,
         session_id: str | None = None,
         on_notification: Callable[[Notification], None] | None = None,
+        session_config: SessionConfig | None = None,
     ) -> RunResult:
-        return self.start_session(session_id).run(input, on_notification=on_notification)
+        return self.start_session(session_id, config=session_config).run(input, on_notification=on_notification)
 
 
 class Session:
-    def __init__(self, harness: DeepSeekHarness, session_id: str) -> None:
+    def __init__(self, harness: DeepSeekHarness, session_id: str, *, config: SessionConfig | None = None) -> None:
         self.harness = harness
         self.id = session_id
+        self.config = config
+        self._opened = False
+
+    def open(self, config: SessionConfig | None = None) -> None:
+        if self._opened:
+            return
+        selected = config or self.config or SessionConfig()
+        self.harness.start()
+        self.harness.client.session_open(
+            self.id,
+            resume=selected.resume,
+            provider=selected.provider,
+            model=selected.model,
+            max_tokens=selected.max_tokens,
+            reasoning_effort=selected.reasoning_effort,
+            system_prompt=selected.system_prompt,
+            allowed_tools=selected.allowed_tools,
+            output_schema=selected.output_schema,
+        )
+        self.config = selected
+        self._opened = True
+
+    def steer(self, input: str | list[JsonObject]) -> str:
+        self.harness.start()
+        return self.harness.client.session_steer(self.id, normalize_input(input))
+
+    def inject(self, input: str | list[JsonObject]) -> str:
+        self.harness.start()
+        return self.harness.client.session_inject(self.id, normalize_input(input))
+
+    def cancel(self, *, keep_inbox: bool = False) -> None:
+        self.harness.start()
+        self.harness.client.session_cancel(self.id, keep_inbox=keep_inbox)
+
+    def output(self) -> SessionOutputResponse:
+        self.harness.start()
+        return self.harness.client.session_output(self.id)
+
+    def close(self) -> bool:
+        self.harness.start()
+        closed = self.harness.client.session_close(self.id).closed
+        self._opened = False
+        return closed
 
     def run(
         self,
@@ -135,6 +201,8 @@ class Session:
         *,
         on_notification: Callable[[Notification], None] | None = None,
     ) -> RunResult:
+        if self.config is not None:
+            self.open()
         content_blocks = normalize_input(input)
         notifications: list[Notification] = []
         events: list[JsonObject] = []
@@ -173,6 +241,12 @@ class Session:
                 ):
                     break
 
+        structured_output: JsonValue = None
+        if self.config is not None and self.config.output_schema is not None:
+            output = self.output()
+            if output.available:
+                structured_output = output.structuredOutput
+
         return RunResult(
             session_id=self.id,
             final_response=final_response(events),
@@ -180,6 +254,7 @@ class Session:
             events=events,
             notifications=notifications,
             session_root=self.harness.config.session_root,
+            structured_output=structured_output,
         )
 
 

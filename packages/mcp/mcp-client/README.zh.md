@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelcontextprotocol.io/) 服务器，把它们的工具注册到 `ctx.tools`，使模型能够通过服务器限定名称（`mcp__<serverName>__<rawName>`）将其作为原生工具使用。
+MCP 客户端桥接插件：直接连接外部 [Model Context Protocol](https://modelcontextprotocol.io/) 服务器，或代理宿主拥有的逐运行 MCP 世代，再把工具以服务器限定名称（`mcp__<serverName>__<rawName>`）注册到 `ctx.tools`。
 
 ## 用法
 
@@ -27,9 +27,19 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
     url: http://localhost:3000/mcp
     headers:
       Authorization: !!js '`Bearer ${process.env.MCP_TOKEN}`'
+
+- id: mcp-platform-host
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    transport: host-bridge
+    baseUrl: !!js process.env.DSH_MCP_BRIDGE_URL ?? ''
+    runToken: !!js process.env.DSH_MCP_RUN_TOKEN ?? ''
+    failOnStartupError: true
 ```
 
 模型会看到 `mcp__github__create_issue`、`mcp__web__search` 等工具，这与 Claude Code 和 Codex 使用的服务器限定形状相同。HMR（热模块替换）支持热替换：编辑配置项会触发断开 + 重新连接，无需重启进程；`serverName` 不变时会生成完全相同的工具名称。
+
+`host-bridge` 是多服务器平台模式。DSH 从 `POST /bridge/mcp/manifest` 获取一个无密钥且已过滤拒绝项的清单，并把调用发到 `POST /bridge/mcp/invoke`；宿主保留服务器对象、凭据和传输策略。不透明能力令牌只允许通过回环 HTTP 发送。`baseUrl` 与 `runToken` 同时为空时禁用此桥。
 
 ## 配置
 
@@ -50,6 +60,8 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 | `reconnect.maxDelayMs` | 两者 | 否 | 退避上限（毫秒）；同时也是重置尝试预算所需的正常运行时长（默认 30000） |
 | `reconnect.maxAttempts` | 两者 | 否 | 每次中断期间连续失败尝试次数上限，超出后彻底放弃（默认 10） |
 
+对于 `host-bridge`，`baseUrl` 和 `runToken` 选择回环宿主世代；`requestTimeoutMs` 默认 60000，`maxResponseBytes` 默认 16777216，`failOnStartupError` 的激活语义相同。只属于直接传输的字段（`serverName`、命令、URL、标头和重连策略）不适用。
+
 ## 工具命名
 
 每个 MCP 工具都有两个名称：通过 `tools/call` 在协议上传送的原始 MCP 名称，以及公开名称 `mcp__<serverName>__<rawName>`，后者注册到 `ctx.tools`。公开名称会规范化为 DeepSeek 函数名称约定（64 个字符、`[A-Za-z0-9_-]`）；如果替换或截断改变名称，就会追加 `(serverName, rawName)` 的确定性 12 位十六进制 hash，确保不同工具绝不会折叠为同一个名称。名称是 `(serverName, rawName)` 的纯函数：连接顺序、重新同步和其他服务器永远不会重命名工具。
@@ -69,6 +81,7 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 - 断开／崩溃时：supervisor 以指数退避（`reconnect.initialDelayMs` 逐次翻倍，上限 `reconnect.maxDelayMs`）重启原始服务器配置，成功后重新执行发现——恢复的世代会替换前一个，因此工具既不会重复也不会泄漏。中断期间最后一个正常世代保持注册；针对它的调用在恢复前会失败。
 - 重连按中断预算控制：连续失败达到 `reconnect.maxAttempts` 次后，该服务器的工具会被注销，重连停止，直到 HMR 重载或重启 Host。连接存活超过 `maxDelayMs` 会重置预算，因此偶尔崩溃的服务器可以无限恢复，而崩溃循环的服务器——即使短暂连接成功——仍会耗尽上限而非永远重启。
 - 重连状态在日志中对用户可见：reconnecting（warn，含尝试次数和延迟）、recovered（info）、最终失败和 disabled-loss（error）。dispose（资源释放）会取消任何待执行的重连。设置 `reconnect.enabled: false` 时，连接丢失后工具保持注册但调用失败，直到重载——即手动恢复行为。
+- 在 host-bridge 模式中，清单注册是原子的：无效身份、重复的规范化名称或外部注册冲突会回滚整个世代。释放时注销全部代理工具；宿主拒绝会成为普通工具错误。
 
 ## 消费的服务
 
@@ -111,6 +124,7 @@ MCP 客户端桥接插件：连接外部 [Model Context Protocol](https://modelc
 ## 已知限制与暂缓事项
 
 - **只桥接 MCP 的工具能力**：资源和提示词没有 harness 消费接口，暂缓实现。
+- **宿主桥只允许回环地址**：远程平台桥必须设计认证传输，不能把不透明运行令牌暴露到宿主之外。
 - **启动超时继承自 MCP SDK**：DSH 尚未公开连接／发现超时。每次 initialize 请求或分页 `tools/list` 请求都使用 SDK 默认的 60 秒，因此在初始同步完成期间，无响应的 server 或 cursor chain 可能同时延迟激活与 teardown。
 - **重连在传输关闭时触发**：崩溃的 stdio 子进程会触发重连；Streamable HTTP 失败通过每次请求以及 SDK 传输自身的 SSE（Server-Sent Events）流恢复机制暴露，因此不可达的 HTTP 服务器会按调用重试，而非由 supervisor 重新 spawn。
 - **图片是唯一的持久丰富结果桥接**：PNG、JPEG、WebP 和 GIF 可以在确切能力得到证明后进入 Native 上下文。音频和嵌入资源载荷仍只存在于执行局部，并配有明确诊断；资源链接只以文本保留名称和 URI。

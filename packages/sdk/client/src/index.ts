@@ -10,7 +10,7 @@
  */
 
 export { DeepSeekHarness, HarnessSession } from './api.ts'
-export type { RunOptions } from './api.ts'
+export type { RunOptions, SessionOptions } from './api.ts'
 export {
   HarnessClient,
   RequestTimeoutError,

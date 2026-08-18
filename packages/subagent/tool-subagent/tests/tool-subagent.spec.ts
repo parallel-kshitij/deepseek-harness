@@ -68,6 +68,22 @@ function text(result: { content: { type: string; text?: string }[] }): string {
 }
 
 describe('dsh-tool-subagent', () => {
+  it('rejects a blank configured delegation description', () => {
+    const ctx = new Context()
+    expect(() => {
+      tool.apply(ctx, {
+        provider: 'spawn',
+        delegationDescription: '  ',
+      })
+    }).toThrow(/delegationDescription.*non-empty/)
+  })
+
+  it('prepends a non-empty configured delegation description', async () => {
+    const ctx = await setup({ provider: 'mock', delegationDescription: 'Use the review specialist.' })
+    expect(ctx.tools.get('subagent')?.description).toContain('Use the review specialist.')
+    await ctx.fiber.dispose()
+  })
+
   it('rejects continuable background policy when the provider cannot prepare continuable children', async () => {
     let failure: unknown
     try {

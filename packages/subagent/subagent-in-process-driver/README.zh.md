@@ -46,6 +46,8 @@
 
 正常结束却始终未提交必需结构化值的轮次会报告 `error`；驱动器不会重新提示。所有注册都附着于子 agent fiber，并随其一同消失。
 
+该 attachment 辅助函数独立于 `startInProcessRun` 导出。任何可信的 agent 创建 `setup(agentCtx)` 事务都可在该 Agent 作用域中复用它；SDK JSON-RPC 服务器对根会话使用的也是同一个原语。辅助函数不会驱动、重试、持久化或释放 Agent——这些生命周期边界归调用方所有；只有权威工具结果提交之后，调用方才读取 `captured()`。
+
 ## 模型体验
 
 ### 子 agent 请求

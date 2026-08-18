@@ -22,6 +22,12 @@ def test_default_config_is_shipped_with_the_package() -> None:
     assert "@deepseek-ai/dsh-agent-spine-demo" in config
     assert "@deepseek-ai/dsh-session-persistence-jsonl" in config
     assert "@deepseek-ai/dsh-session-checkpoint-policy" in config
+    assert "@deepseek-ai/dsh-attachment-local" in config
+    assert "@deepseek-ai/dsh-bash-sandbox" in config
+    assert "@deepseek-ai/dsh-fs-sandbox" in config
+    assert "@deepseek-ai/dsh-tool-fs-search" in config
+    assert "@deepseek-ai/dsh-subagent-spawn-in-process" in config
+    assert "@deepseek-ai/dsh-compaction-basic" in config
 
 
 def test_unknown_explicit_mode_fails_loud() -> None:

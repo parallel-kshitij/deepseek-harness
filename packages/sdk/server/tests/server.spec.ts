@@ -209,6 +209,178 @@ describe('HarnessSdkJsonRpcServer', () => {
     expect(otherHandle.dispose).toHaveBeenCalledOnce()
   })
 
+  it('controls one explicitly opened session without affecting sibling lifecycle', async () => {
+    const steer = vi.fn<Agent['steer']>()
+    const inject = vi.fn<Agent['inject']>()
+    const cancel = vi.fn<Agent['cancel']>()
+    const section = vi.fn(() => () => undefined)
+    const restrict = vi.fn(() => () => undefined)
+    const on = vi.fn(() => () => undefined)
+    const agent = ({
+      id: SessionId('controlled'),
+      status: 'idle',
+      steer,
+      inject,
+      cancel,
+    } satisfies Pick<Agent, 'id' | 'status' | 'steer' | 'inject' | 'cancel'>) as unknown as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const agentCtx = {
+      systemPrompt: { section },
+      tools: { restrict },
+      on,
+    } as unknown as Context
+    const create = vi.fn(async (options: { setup?: (ctx: Context) => void }) => {
+      options.setup?.(agentCtx)
+      return handle
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, resume: vi.fn(), get: () => agent },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+    await expect(server.open({
+      sessionId: 'controlled',
+      provider: 'route',
+      model: 'model',
+      maxTokens: 128,
+      reasoningEffort: 'max',
+      systemPrompt: 'exact prompt',
+      allowedTools: [],
+    })).resolves.toEqual({ sessionId: 'controlled', disposition: 'created' })
+    expect(section).toHaveBeenCalledWith({
+      name: 'deployment:persona',
+      order: 0,
+      text: 'exact prompt',
+      complete: true,
+    })
+    expect(restrict).toHaveBeenCalledWith({ allow: [] })
+    expect(on).toHaveBeenCalledTimes(2)
+
+    const steered = await server.handleRequest('session/steer', {
+      sessionId: 'controlled', contentBlocks: [{ type: 'text', text: 'next' }],
+    }) as { messageId: string; wokeIdle?: boolean }
+    const injected = await server.handleRequest('session/inject', {
+      sessionId: 'controlled', contentBlocks: [{ type: 'text', text: 'context' }],
+    }) as { messageId: string }
+    expect(steered.messageId).toBeTypeOf('string')
+    expect(steered.wokeIdle).toBe(true)
+    expect(injected.messageId).toBeTypeOf('string')
+    expect(injected).not.toHaveProperty('wokeIdle')
+    expect(steer).toHaveBeenCalledOnce()
+    expect(inject).toHaveBeenCalledOnce()
+    await expect(server.handleRequest('session/cancel', { sessionId: 'controlled', keepInbox: true })).resolves.toEqual({})
+    expect(cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+    await expect(server.handleRequest('session/output', { sessionId: 'controlled' })).rejects.toThrow('has no output schema')
+    await expect(server.handleRequest('session/close', { sessionId: 'controlled' })).resolves.toEqual({ closed: true })
+    await expect(server.handleRequest('session/close', { sessionId: 'controlled' })).resolves.toEqual({ closed: false })
+    expect(handle.dispose).toHaveBeenCalledOnce()
+    await server.shutdown()
+  })
+
+  it('keeps the session-local structured-output tool outside the global allowlist', async () => {
+    const agent = ({ id: SessionId('structured') } satisfies Pick<Agent, 'id'>) as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const restrict = vi.fn(() => () => undefined)
+    const agentCtx = {
+      systemPrompt: { section: vi.fn(() => () => undefined) },
+      tools: {
+        register: vi.fn(() => () => undefined),
+        restrict,
+        guard: vi.fn(() => () => undefined),
+      },
+      on: vi.fn(() => () => undefined),
+    } as unknown as Context
+    const create = vi.fn(async (options: { setup?: (ctx: Context) => void }) => {
+      options.setup?.(agentCtx)
+      return handle
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, resume: vi.fn(), get: () => agent },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+    await server.open({
+      sessionId: 'structured',
+      allowedTools: ['read'],
+      outputSchema: {
+        type: 'object',
+        properties: { answer: { type: 'number' } },
+        required: ['answer'],
+        additionalProperties: false,
+      },
+    })
+    expect(restrict).toHaveBeenCalledWith({ allow: ['read'] })
+    await expect(server.output({ sessionId: 'structured' })).resolves.toEqual({ available: false })
+    await server.shutdown()
+  })
+
+  it('resumes an explicitly configured persisted session through the agent factory', async () => {
+    const agent = ({ id: SessionId('persisted') } satisfies Pick<Agent, 'id'>) as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const resume = vi.fn(async () => handle)
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create: vi.fn(), resume, get: () => agent },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+    await expect(server.handleRequest('session/open', {
+      sessionId: 'persisted',
+      resume: true,
+    })).resolves.toEqual({ sessionId: 'persisted', disposition: 'resumed' })
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: SessionId('persisted'),
+    }))
+    await expect(server.open({ sessionId: 'persisted' })).rejects.toThrow('already open')
+    await server.shutdown()
+  })
+
+  it('waits for an in-flight creation before closing that session', async () => {
+    const agent = ({ id: SessionId('pending') } satisfies Pick<Agent, 'id'>) as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const gate = Promise.withResolvers<typeof handle>()
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create: vi.fn(() => gate.promise), resume: vi.fn(), get: () => agent },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+    const opening = server.open({ sessionId: 'pending' })
+    const closing = server.closeSession({ sessionId: 'pending' })
+    gate.resolve(handle)
+    await expect(opening).resolves.toEqual({ sessionId: 'pending', disposition: 'created' })
+    await expect(closing).resolves.toEqual({ closed: true })
+    expect(handle.dispose).toHaveBeenCalledOnce()
+    await server.shutdown()
+  })
+
+  it('fails invalid session controls before publication', async () => {
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create: vi.fn(), resume: vi.fn(), get: () => undefined },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+    await expect(server.open({ sessionId: '', maxTokens: 1 })).rejects.toThrow('non-empty string')
+    await expect(server.open({ sessionId: 'bad-token', maxTokens: 0 })).rejects.toThrow('positive safe integer')
+    await expect(server.open({ sessionId: 'bad-provider', provider: '' })).rejects.toThrow('provider must be a non-empty')
+    await expect(server.open({ sessionId: 'bad-model', model: '' })).rejects.toThrow('model must be a non-empty')
+    await expect(server.open({ sessionId: 'bad-effort', reasoningEffort: '' })).rejects.toThrow('reasoningEffort')
+    await expect(server.open({ sessionId: 'bad-tools', allowedTools: [''] })).rejects.toThrow('allowedTools')
+    await expect(server.open({ sessionId: 'bad-schema', outputSchema: { type: 'string' } })).rejects.toThrow()
+    await expect(server.steer({ sessionId: 'missing', contentBlocks: [] })).rejects.toThrow('not open')
+    await expect(server.handleRequest('unknown', {})).rejects.toThrow('unknown DeepSeek Harness SDK runtime method')
+    await server.shutdown()
+    await expect(server.open({ sessionId: 'after-shutdown' })).rejects.toThrow('shutting down')
+  })
+
   it('rejects a prompt for a session whose agent was disposed outside the server', async () => {
     const followup = vi.fn<Agent['followup']>()
     const agent = ({
@@ -237,6 +409,8 @@ describe('HarnessSdkJsonRpcServer', () => {
     expect((await prompt('while live')).messageId).toBeTypeOf('string')
     live = false
     await expect(prompt('after detach')).rejects.toThrow('session agent was disposed outside the server: zombie')
+    expect(() => server.cancel({ sessionId: 'zombie', keepInbox: false }))
+      .toThrow('session agent was disposed outside the server: zombie')
     // The detached agent was never driven by the rejected prompt.
     expect(followup).toHaveBeenCalledOnce()
     await server.shutdown()

@@ -6,6 +6,6 @@
  * @module @deepseek-ai/dsh-sdk-jsonrpc-demo/bin
  */
 
-import { runJsonrpcAgent } from './runner.ts'
+import { runJsonrpcAgentOrExit } from './runner.ts'
 
-await runJsonrpcAgent()
+await runJsonrpcAgentOrExit()

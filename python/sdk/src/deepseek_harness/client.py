@@ -15,7 +15,16 @@ from typing import Callable, TypeAlias, TypeVar
 from pydantic import BaseModel
 
 from .errors import JsonRpcError, TransportClosedError
-from .models import IncomingRequest, InitializeResponse, JsonObject, JsonValue, Notification
+from .models import (
+    IncomingRequest,
+    InitializeResponse,
+    JsonObject,
+    JsonValue,
+    Notification,
+    SessionCloseResponse,
+    SessionOpenResponse,
+    SessionOutputResponse,
+)
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 NotificationFilter: TypeAlias = Callable[[Notification], bool]
@@ -121,6 +130,7 @@ class HarnessClient:
         provider: str,
         model: str,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> InitializeResponse:
         payload: JsonObject = {
             "cwd": str(Path(cwd).resolve()),
@@ -129,6 +139,8 @@ class HarnessClient:
         }
         if max_tokens is not None:
             payload["maxTokens"] = max_tokens
+        if reasoning_effort is not None:
+            payload["reasoningEffort"] = reasoning_effort
         try:
             return self.request("initialize", payload, response_model=InitializeResponse)
         except BaseException:
@@ -151,6 +163,71 @@ class HarnessClient:
             on_notification=on_notification,
             notification_filter=self._notification_belongs_to_session_tree(session_id),
             notification_subscription=notification_subscription,
+        )
+        return response.messageId
+
+    def session_open(
+        self,
+        session_id: str,
+        *,
+        resume: bool = False,
+        provider: str | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        system_prompt: str | None = None,
+        allowed_tools: list[str] | None = None,
+        output_schema: JsonObject | None = None,
+    ) -> SessionOpenResponse:
+        payload: JsonObject = {"sessionId": session_id}
+        if resume:
+            payload["resume"] = True
+        optional: tuple[tuple[str, JsonValue], ...] = (
+            ("provider", provider),
+            ("model", model),
+            ("maxTokens", max_tokens),
+            ("reasoningEffort", reasoning_effort),
+            ("systemPrompt", system_prompt),
+            ("allowedTools", allowed_tools),
+            ("outputSchema", output_schema),
+        )
+        for key, value in optional:
+            if value is not None:
+                payload[key] = value
+        return self.request("session/open", payload, response_model=SessionOpenResponse)
+
+    def session_steer(self, session_id: str, content_blocks: list[JsonObject]) -> str:
+        return self._session_input("session/steer", session_id, content_blocks)
+
+    def session_inject(self, session_id: str, content_blocks: list[JsonObject]) -> str:
+        return self._session_input("session/inject", session_id, content_blocks)
+
+    def session_cancel(self, session_id: str, *, keep_inbox: bool = False) -> None:
+        self.request(
+            "session/cancel",
+            {"sessionId": session_id, "keepInbox": keep_inbox},
+            response_model=_EmptyResponse,
+        )
+
+    def session_output(self, session_id: str) -> SessionOutputResponse:
+        return self.request(
+            "session/output",
+            {"sessionId": session_id},
+            response_model=SessionOutputResponse,
+        )
+
+    def session_close(self, session_id: str) -> SessionCloseResponse:
+        return self.request(
+            "session/close",
+            {"sessionId": session_id},
+            response_model=SessionCloseResponse,
+        )
+
+    def _session_input(self, method: str, session_id: str, content_blocks: list[JsonObject]) -> str:
+        response = self.request(
+            method,
+            {"sessionId": session_id, "contentBlocks": content_blocks},
+            response_model=_SessionPromptResponse,
         )
         return response.messageId
 
@@ -550,6 +627,10 @@ class _SessionPromptResponse(BaseModel):
 
 
 class _ShutdownResponse(BaseModel):
+    pass
+
+
+class _EmptyResponse(BaseModel):
     pass
 
 

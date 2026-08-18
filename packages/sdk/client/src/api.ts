@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionOpenParams, SessionOutputResult } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessClient, isRecord, SdkProtocolError } from './client.ts'
 import type { ContentBlock, DeepSeekHarnessOptions, HarnessClientOptions, HarnessNotification, RunResult } from './types.ts'
 
@@ -26,6 +27,7 @@ export class DeepSeekHarness implements AsyncDisposable {
   private readonly provider: string
   private readonly model: string
   private readonly maxTokens: number | undefined
+  private readonly reasoningEffort: string | undefined
   private initialized: Promise<void> | undefined
   private closed = false
 
@@ -40,6 +42,7 @@ export class DeepSeekHarness implements AsyncDisposable {
     this.provider = options.provider ?? 'deepseek-official'
     this.model = options.model ?? 'deepseek-v4-flash'
     this.maxTokens = options.maxTokens
+    this.reasoningEffort = options.reasoningEffort
   }
 
   /**
@@ -68,6 +71,7 @@ export class DeepSeekHarness implements AsyncDisposable {
           provider: this.provider,
           model: this.model,
           ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
+          ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
         })
       } catch (error) {
         this.initialized = undefined
@@ -80,13 +84,15 @@ export class DeepSeekHarness implements AsyncDisposable {
   }
 
   /**
-   * Open a session handle (no wire traffic; the runtime creates the session
-   * on its first prompt).
+   * Open a session handle (no immediate wire traffic). A handle with explicit
+   * options publishes that composition before its first prompt; an unconfigured
+   * handle keeps the runtime's lazy default-session behavior.
    * @param sessionId - explicit id to reuse; omitted mints a fresh one.
+   * @param options - optional explicit route and scoped session composition.
    * @returns the session handle.
    */
-  session(sessionId?: string): HarnessSession {
-    return new HarnessSession(this, sessionId ?? `session-${randomUUID().replaceAll('-', '')}`)
+  session(sessionId?: string, options?: SessionOptions): HarnessSession {
+    return new HarnessSession(this, sessionId ?? `session-${randomUUID().replaceAll('-', '')}`, options)
   }
 
   /**
@@ -96,7 +102,7 @@ export class DeepSeekHarness implements AsyncDisposable {
    * @returns the owned activity interval.
    */
   run(input: string | ContentBlock[], options?: RunOptions): Promise<RunResult> {
-    return this.session(options?.sessionId).run(input, options)
+    return this.session(options?.sessionId, options?.session).run(input, options)
   }
 
   /**
@@ -124,17 +130,87 @@ export interface RunOptions {
   sessionId?: string
   /** Observer invoked with every notification for this session tree, in wire order. */
   onNotification?: (notification: HarnessNotification) => void
+  /** Optional explicit session composition applied before the first prompt. */
+  session?: SessionOptions
 }
+
+/** Explicit per-session route and scoped composition. */
+export type SessionOptions = Omit<SessionOpenParams, 'sessionId'>
 
 /**
  * One SDK session: a stable id plus owned activity intervals.
  */
 export class HarnessSession {
+  private readonly options: SessionOptions | undefined
+  private opened: Promise<void> | undefined
   /**
    * @param harness - the owning harness (supplies the client and handshake).
    * @param id - the wire session id this handle runs on.
    */
-  constructor(readonly harness: DeepSeekHarness, readonly id: string) {}
+  constructor(readonly harness: DeepSeekHarness, readonly id: string, options?: SessionOptions) {
+    this.options = options
+  }
+
+  /**
+   * Publish this session with explicit composition. Idempotent on this handle.
+   * @param options - explicit route and scoped composition.
+   * @returns settlement after the session is open.
+   */
+  open(options: SessionOptions = this.options ?? {}): Promise<void> {
+    this.opened ??= (async () => {
+      await this.harness.start()
+      await this.harness.client.openSession({ sessionId: this.id, ...options })
+    })()
+    return this.opened
+  }
+
+  /**
+   * Queue next-step steering and wake this session.
+   * @param input - steering text or content blocks.
+   * @returns durable queued-message identity.
+   */
+  async steer(input: string | ContentBlock[]): Promise<string> {
+    await this.harness.start()
+    return this.harness.client.steer(this.id, normalizeInput(input))
+  }
+
+  /**
+   * Queue next-step context without waking an idle session.
+   * @param input - injected text or content blocks.
+   * @returns durable queued-message identity.
+   */
+  async inject(input: string | ContentBlock[]): Promise<string> {
+    await this.harness.start()
+    return this.harness.client.inject(this.id, normalizeInput(input))
+  }
+
+  /**
+   * Cancel this session's active activity without stopping the runtime.
+   * @param keepInbox - preserve queued follow-ups when true.
+   * @returns settlement after cancellation is accepted.
+   */
+  async cancel(keepInbox = false): Promise<void> {
+    await this.harness.start()
+    await this.harness.client.cancelSession(this.id, keepInbox)
+  }
+
+  /**
+   * Read the session's current structured-output capture.
+   * @returns current capture availability and value.
+   */
+  async output(): Promise<SessionOutputResult> {
+    await this.harness.start()
+    return this.harness.client.sessionOutput(this.id)
+  }
+
+  /**
+   * Dispose this session while preserving the owning runtime.
+   * @returns whether a live session was closed.
+   */
+  async close(): Promise<boolean> {
+    await this.harness.start()
+    return (await this.harness.client.closeSession(this.id)).closed
+  }
 
   /**
    * Queue one prompt, then observe the whole session through its next idle.
@@ -145,6 +221,7 @@ export class HarnessSession {
    */
   async run(input: string | ContentBlock[], options?: Pick<RunOptions, 'onNotification'>): Promise<RunResult> {
     await this.harness.start()
+    if (this.options !== undefined) await this.open()
     const client = this.harness.client
     const contentBlocks = normalizeInput(input)
     const events: SessionEvent[] = []
@@ -185,9 +262,15 @@ export class HarnessSession {
       subscription.close()
     }
 
+    const reason = finishReason(events)
+    const output = this.options?.outputSchema === undefined
+      ? undefined
+      : await client.sessionOutput(this.id)
     return {
       sessionId: this.id,
       finalResponse: finalResponse(events),
+      ...reason === undefined ? {} : { finishReason: reason },
+      ...output?.available === true ? { structuredOutput: output.structuredOutput } : {},
       events,
       notifications,
     }
@@ -243,4 +326,22 @@ export function finalResponse(events: SessionEvent[]): string {
       .join('')
   }
   return ''
+}
+
+/**
+ * Extract the kind of the last root turn ending in an owned activity interval.
+ * @param events - the activity interval's `session.event` payloads in wire order.
+ * @returns the final reason kind, or `undefined` when no turn ended.
+ */
+export function finishReason(events: SessionEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]
+    if (event?.type !== 'turn/end') continue
+    const reason = event.data.reason
+    if (!isRecord(reason) || typeof reason.kind !== 'string') {
+      throw new SdkProtocolError('turn/end event requires a string data.reason.kind')
+    }
+    return reason.kind
+  }
+  return undefined
 }

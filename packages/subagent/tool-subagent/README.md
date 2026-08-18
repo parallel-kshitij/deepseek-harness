@@ -20,6 +20,7 @@ A foreground call passes the execution signal through startup and execution, awa
 |---|---|
 | `provider` (required) | Provider name (`spawn`, `fork`, `acp`, ...). |
 | `toolName` | Model-facing name, default `subagent`; distinct for every loaded instance. |
+| `delegationDescription` | Optional non-empty profile purpose prepended to the generated tool description; useful for separately named fixed-persona delegates. |
 | `enableRunInBackground` | Exposes background mode, default `true`; disabling also rejects forced background calls. |
 | `backgroundMode` | Background lifecycle policy, default `one-shot`. `one-shot` defaults calls to foreground; `continuable` defaults them to background, requires the provider's `prepareContinuable` capability, and returns a durable child id without requiring the follow-up tool. |
 | `agentOptions` | Provider-specific child `provider`, `model`, and positive `maxTokens`; the in-process provider treats explicit values as overrides of inherited parent options. |

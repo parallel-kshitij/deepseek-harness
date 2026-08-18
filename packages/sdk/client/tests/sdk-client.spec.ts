@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DeepSeekHarness,
   HarnessClient,
@@ -20,7 +20,7 @@ import {
   TransportClosedError,
   type HarnessNotification,
 } from '../src/index.ts'
-import { finalResponse, normalizeInput } from '../src/api.ts'
+import { finalResponse, finishReason, normalizeInput } from '../src/api.ts'
 
 const fakeRuntime = fileURLToPath(new URL('./fake-runtime.ts', import.meta.url))
 
@@ -54,6 +54,14 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 describe('DeepSeekHarness', () => {
+  it('opens a bare session with an empty composition', async () => {
+    const start = vi.fn(() => Promise.resolve())
+    const openSession = vi.fn(() => Promise.resolve({ sessionId: 'bare', disposition: 'created' as const }))
+    const harness = { start, client: { openSession } } as unknown as DeepSeekHarness
+    await new HarnessSession(harness, 'bare').open()
+    expect(openSession).toHaveBeenCalledWith({ sessionId: 'bare' })
+  })
+
   it('ignores notifications that precede the submitted message receipt', async () => {
     const notifications = [
       { method: 'session.status', params: { sessionId: 'owned', status: 'running' } },
@@ -116,6 +124,7 @@ describe('DeepSeekHarness', () => {
     const harness = harnessWith({ FAKE_TEXT: 'turn answer' })
     const first = await harness.run('say hi')
     expect(first.finalResponse).toBe('turn answer')
+    expect(first.finishReason).toBe('completed')
     expect(first.events.map(event => event.type)).toEqual([
       'agent/inbox/spliced', 'turn/start', 'assistant/chunk', 'assistant/message', 'turn/end',
     ])
@@ -156,6 +165,7 @@ describe('DeepSeekHarness', () => {
       provider: 'custom-provider',
       model: 'custom-model',
       maxTokens: 4096,
+      reasoningEffort: 'high',
     })
     cleanups.push(() => harness.close())
     await harness.run('one')
@@ -167,7 +177,54 @@ describe('DeepSeekHarness', () => {
       provider: 'custom-provider',
       model: 'custom-model',
       maxTokens: 4096,
+      reasoningEffort: 'high',
     }])
+  })
+
+  it('opens a scoped session and exposes steer, inject, cancel, output, and close', async () => {
+    const harness = harnessWith({ FAKE_OUTPUT: '{"answer":42}' })
+    const session = harness.session('controlled', {
+      provider: 'route',
+      model: 'model',
+      reasoningEffort: 'max',
+      systemPrompt: 'exact persona',
+      allowedTools: [],
+      outputSchema: { type: 'object', properties: { answer: { type: 'number' } } },
+    })
+    await session.open()
+    await expect(session.steer('change course')).resolves.toMatch(/^fake-input-/)
+    await expect(session.inject('hidden context')).resolves.toMatch(/^fake-input-/)
+    await expect(session.cancel(true)).resolves.toBeUndefined()
+    await expect(session.output()).resolves.toEqual({ available: true, structuredOutput: { answer: 42 } })
+    await expect(session.close()).resolves.toBe(true)
+    await expect(session.close()).resolves.toBe(false)
+    await harness.close()
+  })
+
+  it('opens a configured session lazily before run and returns no unavailable output', async () => {
+    const harness = harnessWith()
+    const session = harness.session('lazy-open', { resume: true })
+    const result = await session.run('continue')
+    expect(result.finalResponse).toBe('hello from fake runtime')
+    await expect(session.output()).resolves.toEqual({ available: false })
+    await harness.close()
+  })
+
+  it('returns committed structured output from a configured run interval', async () => {
+    const harness = harnessWith({ FAKE_OUTPUT: '{"answer":42}' })
+    const result = await harness.run('return 42', {
+      sessionId: 'structured-run',
+      session: {
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'number' } },
+          required: ['answer'],
+        },
+      },
+    })
+    expect(result.structuredOutput).toEqual({ answer: 42 })
+    expect(result.finishReason).toBe('completed')
+    await harness.close()
   })
 
   it('resolves a relative launch cwd to an absolute workspace before the handshake', async () => {
@@ -224,6 +281,14 @@ describe('DeepSeekHarness', () => {
     await expect(harness.run('after-close')).rejects.toThrow(TransportClosedError)
   })
 
+  it('does not replace the client when a closed harness start fails', async () => {
+    const harness = harnessWith()
+    const closedClient = harness.client
+    await harness.close()
+    await expect(harness.start()).rejects.toThrow(TransportClosedError)
+    expect(harness.client).toBe(closedClient)
+  })
+
   it('rejects a malformed initialize result as a protocol error', async () => {
     const harness = harnessWith({ FAKE_MALFORMED: '1' })
     await expect(harness.run('bad')).rejects.toThrow(SdkProtocolError)
@@ -243,6 +308,37 @@ describe('DeepSeekHarness', () => {
 })
 
 describe('HarnessClient', () => {
+  it('rejects malformed results for every typed session control', async () => {
+    const client = Object.create(HarnessClient.prototype) as HarnessClient
+    const request = vi.spyOn(client, 'request')
+
+    for (const result of [null, { sessionId: 'other', disposition: 'created' }, { sessionId: 's', disposition: 'other' }]) {
+      request.mockResolvedValueOnce(result)
+      await expect(client.openSession({ sessionId: 's' })).rejects.toThrow(SdkProtocolError)
+    }
+    for (const result of [null, { unexpected: true }]) {
+      request.mockResolvedValueOnce(result)
+      await expect(client.cancelSession('s')).rejects.toThrow(SdkProtocolError)
+    }
+    for (const result of [
+      null,
+      { available: 'yes' },
+      { available: true },
+      { available: false, structuredOutput: null },
+    ]) {
+      request.mockResolvedValueOnce(result)
+      await expect(client.sessionOutput('s')).rejects.toThrow(SdkProtocolError)
+    }
+    for (const result of [null, { closed: 'yes' }]) {
+      request.mockResolvedValueOnce(result)
+      await expect(client.closeSession('s')).rejects.toThrow(SdkProtocolError)
+    }
+    request.mockResolvedValueOnce({})
+    await expect(client.steer('s', normalizeInput('x'))).rejects.toThrow(SdkProtocolError)
+    request.mockResolvedValueOnce({ messageId: 1 })
+    await expect(client.inject('s', normalizeInput('x'))).rejects.toThrow(SdkProtocolError)
+  })
+
   it('times out a hung request at the per-call bound', async () => {
     const client = new HarnessClient(fakeLaunch({ FAKE_HANG_PROMPT: '1' }))
     cleanups.push(() => client.close())
@@ -523,5 +619,15 @@ describe('pure helpers', () => {
       { type: 'assistant/message', seq: 0, time: 0, data: { message: { content: [{ type: 'text', text: 'first' }] } } } as never,
       { type: 'assistant/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: 'a' }, { type: 'tool-call' }, { type: 'text', text: 'b' }] } } } as never,
     ])).toBe('ab')
+  })
+
+  it('finishReason reads the last turn ending and rejects a malformed reason', () => {
+    expect(finishReason([])).toBeUndefined()
+    expect(finishReason([
+      { type: 'turn/end', seq: 0, time: 0, data: { turn: 0, reason: { kind: 'completed' } } } as never,
+    ])).toBe('completed')
+    expect(() => finishReason([
+      { type: 'turn/end', seq: 0, time: 0, data: { turn: 0, reason: 'bad' } } as never,
+    ])).toThrow(SdkProtocolError)
   })
 })

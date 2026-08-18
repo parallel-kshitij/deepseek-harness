@@ -154,6 +154,7 @@ function sessionIdOf(params: Record<string, unknown> | undefined): string {
 }
 
 const reader = createInterface({ input: process.stdin })
+const openedSessions = new Set<string>()
 reader.on('line', (line) => {
   if (line.trim().length === 0) return
   const frame = JSON.parse(line) as { id?: string | number; method?: string; params?: Record<string, unknown> }
@@ -193,8 +194,15 @@ reader.on('line', (line) => {
       }
       respond({ serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } })
       return
+    case 'session/open': {
+      const sessionId = sessionIdOf(frame.params)
+      openedSessions.add(sessionId)
+      respond({ sessionId, disposition: frame.params?.resume === true ? 'resumed' : 'created' })
+      return
+    }
     case 'session/prompt': {
       const sessionId = sessionIdOf(frame.params)
+      openedSessions.add(sessionId)
       const messageId = `fake-user-${seq}`
       event(sessionId, 'agent/inbox/spliced', {
         target: 'next-turn',
@@ -220,6 +228,24 @@ reader.on('line', (line) => {
       runTurn(sessionId)
       notify('session.status', { sessionId, status: 'idle' })
       respond({ messageId })
+      return
+    }
+    case 'session/steer':
+    case 'session/inject':
+      respond({ messageId: `fake-input-${seq}` })
+      return
+    case 'session/cancel':
+      respond({})
+      return
+    case 'session/output':
+      respond(env.FAKE_OUTPUT === undefined
+        ? { available: false }
+        : { available: true, structuredOutput: JSON.parse(env.FAKE_OUTPUT) as unknown })
+      return
+    case 'session/close': {
+      const sessionId = sessionIdOf(frame.params)
+      const closed = openedSessions.delete(sessionId)
+      respond({ closed })
       return
     }
     case 'shutdown':

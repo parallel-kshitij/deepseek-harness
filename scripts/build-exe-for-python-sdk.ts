@@ -47,6 +47,9 @@ const ASSET_GLOBS = [
   'node_modules/**/package.json',
   'node_modules/**/*.json',
   'node_modules/**/*.node',
+  'node_modules/**/*.dylib',
+  'node_modules/**/*.so',
+  'node_modules/**/*.dll',
   'node_modules/**/*.wasm',
 ]
 

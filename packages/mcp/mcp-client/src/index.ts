@@ -18,11 +18,19 @@ import z from '@deepseek-ai/schemastery'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { RECONNECT_DEFAULTS, resolveReconnectPolicy, startConnection } from './connection.ts'
 import type { ReconnectConfig } from './connection.ts'
+import {
+  applyHostBridge,
+  DEFAULT_HOST_BRIDGE_MAX_RESPONSE_BYTES,
+  DEFAULT_HOST_BRIDGE_TIMEOUT_MS,
+} from './host-bridge.ts'
+import type { HostBridgeConfig } from './host-bridge.ts'
 // Side-effect type import: declaration-merges `ctx.tools` onto Context.
 import type {} from '@deepseek-ai/dsh-tools'
 
 export type { McpResult } from './tools.ts'
 export type { ReconnectConfig, ResolvedReconnectPolicy } from './connection.ts'
+export type { HostBridgeConfig } from './host-bridge.ts'
+export { resolveHostBridgeBase } from './host-bridge.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'mcp-client'
@@ -94,8 +102,11 @@ export interface StreamableHttpConfig {
   reconnect?: ReconnectConfig
 }
 
-/** Configuration for one stdio or Streamable HTTP MCP server. */
-export type Config = StdioConfig | StreamableHttpConfig
+/** Configuration for one directly connected MCP server. */
+export type DirectConfig = StdioConfig | StreamableHttpConfig
+
+/** Configuration for one direct MCP server or one host-resident MCP run. */
+export type Config = DirectConfig | HostBridgeConfig
 
 const Reconnect: z<ReconnectConfig> = z.object({
   enabled: z.boolean().default(RECONNECT_DEFAULTS.enabled),
@@ -125,6 +136,14 @@ export const Config = z.union([
     failOnStartupError: z.boolean().default(false),
     reconnect: Reconnect,
   }),
+  z.object({
+    transport: z.const('host-bridge'),
+    baseUrl: z.string().default(''),
+    runToken: z.string().default(''),
+    requestTimeoutMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(DEFAULT_HOST_BRIDGE_TIMEOUT_MS),
+    maxResponseBytes: z.number().step(1).min(1).max(64 * 1024 * 1024).default(DEFAULT_HOST_BRIDGE_MAX_RESPONSE_BYTES),
+    failOnStartupError: z.boolean().default(false),
+  }),
 ]) as unknown as z<Config>
 
 // ---- Plugin apply ----
@@ -138,6 +157,10 @@ export const Config = z.union([
  * @returns startup readiness after connection and initial tool discovery settle.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  if (config.transport === 'host-bridge') {
+    await applyHostBridge(ctx, config)
+    return
+  }
   // Fail loud at load: reconnect misconfiguration (including programmatic
   // construction that bypassed Schemastery) rejects THIS instance before any
   // effect registers.

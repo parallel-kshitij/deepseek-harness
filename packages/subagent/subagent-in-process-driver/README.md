@@ -46,6 +46,8 @@ Depth enforcement is internal to `startInProcessRun`: it reads the parent depth 
 
 A clean turn that never commits the required structured value reports `error`; the driver does not re-prompt. All registrations ride the child fiber and disappear with it.
 
+The attachment helper is exported independently of `startInProcessRun`. Any trusted agent-creation `setup(agentCtx)` transaction may reuse it for that Agent's scope; the SDK JSON-RPC server uses the same primitive for root sessions. The helper does not drive, retry, persist, or dispose the Agent—its caller owns those lifecycle boundaries and reads `captured()` only after an authoritative tool result has committed.
+
 ## Model Experience
 
 ### Child-agent request

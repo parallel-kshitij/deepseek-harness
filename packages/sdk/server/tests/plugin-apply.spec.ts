@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import * as agentCore from '@deepseek-ai/dsh-agent-spine-demo'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import * as jsonrpc from '../src/index.ts'
 
 /**
@@ -57,12 +58,15 @@ async function settle(): Promise<void> {
 /** Mount the real plugin on a minimal harness with in-memory stdio and exit. */
 async function mountPlugin(
   storageDir: string,
-  options: { writeDelayMs?: number; failFlush?: boolean } = {},
+  options: { writeDelayMs?: number; failFlush?: boolean; runtimeReady?: () => Promise<void> } = {},
 ): Promise<ApplyHarness> {
   const ctx = new Context()
   await ctx.plugin(agentCore, { workspaceContext: false })
   await ctx.plugin(JsonlSessionPersistence, { root: storageDir })
   await new Promise(resolve => setTimeout(resolve, 50))
+  if (options.runtimeReady !== undefined) {
+    ctx.provide('loader', { await: options.runtimeReady } as never)
+  }
 
   const input = new PassThrough()
   const events: WireEvent[] = []
@@ -149,6 +153,29 @@ async function mockCompletionServer(): Promise<{ url: string; requests: unknown[
   return { url: `http://127.0.0.1:${address.port}`, requests }
 }
 
+/** Keyless SSE endpoint that completes by calling the schema-bound tool. */
+async function mockStructuredCompletionServer(): Promise<{ url: string; requests: unknown[] }> {
+  const requests: unknown[] = []
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    let body = ''
+    request.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
+    request.on('end', () => {
+      requests.push(JSON.parse(body))
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.write('data: {"choices":[{"delta":{"role":"assistant","content":null,"reasoning_content":""}}]}\n\n')
+      response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"structured-call","type":"function","function":{"name":"structured_output","arguments":"{\\"answer\\":42}"}}]}}]}\n\n')
+      response.write('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}\n\n')
+      response.write('data: [DONE]\n\n')
+      response.end()
+    })
+  })
+  servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('no port')
+  return { url: `http://127.0.0.1:${address.port}`, requests }
+}
+
 describe('dsh-sdk-jsonrpc-server plugin apply', () => {
   it('serves initialize over the injected stdio pair', async () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-apply-init-'))
@@ -164,6 +191,33 @@ describe('dsh-sdk-jsonrpc-server plugin apply', () => {
         result: { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } },
       })
       expect(harness.exits()).toEqual([])
+    } finally {
+      await harness.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('waits for the concurrent loader generation before admitting requests', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-apply-ready-'))
+    const ready = Promise.withResolvers<undefined>()
+    const runtimeReady = vi.fn(async () => ready.promise)
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    const harness = await mountPlugin(storageDir, { runtimeReady })
+    try {
+      harness.send({
+        jsonrpc: '2.0',
+        id: 'ready-init',
+        method: 'initialize',
+        params: { cwd: storageDir, provider: 'deepseek-official', model: 'ready-model' },
+      })
+
+      await vi.waitFor(() => { expect(runtimeReady).toHaveBeenCalledOnce() })
+      await settle()
+      expect(harness.frames().find(frame => frame.id === 'ready-init')).toBeUndefined()
+
+      ready.resolve(undefined)
+      const response = await harness.waitForFrame(frame => frame.id === 'ready-init', 'readiness-gated initialize')
+      expect(response).toMatchObject({ result: { serverInfo: { name: 'deepseek-harness-sdk-runtime' } } })
     } finally {
       await harness.dispose()
       await rm(storageDir, { recursive: true, force: true })
@@ -206,6 +260,68 @@ describe('dsh-sdk-jsonrpc-server plugin apply', () => {
         jsonrpc: '2.0',
         params: { sessionId: 'main', status: 'idle' },
       })
+    } finally {
+      await harness.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('captures root structured output through the real model and tool pipeline', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-apply-structured-'))
+    const llmServer = await mockStructuredCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const harness = await mountPlugin(storageDir)
+    try {
+      harness.send({
+        jsonrpc: '2.0',
+        id: 'structured-init',
+        method: 'initialize',
+        params: { cwd: storageDir, provider: 'deepseek-official', model: 'structured-model' },
+      })
+      await harness.waitForFrame(frame => frame.id === 'structured-init', 'structured initialize response')
+      harness.send({
+        jsonrpc: '2.0',
+        id: 'structured-open',
+        method: 'session/open',
+        params: {
+          sessionId: 'structured-root',
+          allowedTools: [],
+          outputSchema: {
+            type: 'object',
+            properties: { answer: { type: 'number' } },
+            required: ['answer'],
+            additionalProperties: false,
+          },
+        },
+      })
+      const opened = await harness.waitForFrame(frame => frame.id === 'structured-open', 'structured open response')
+      expect(opened).toMatchObject({ result: { sessionId: 'structured-root', disposition: 'created' } })
+      const structuredAgent = harness.ctx.agents.get(SessionId('structured-root'))
+      expect(structuredAgent).toBeDefined()
+      expect(harness.ctx.tools.get('structured_output', structuredAgent)).toBeDefined()
+      harness.send({
+        jsonrpc: '2.0',
+        id: 'structured-prompt',
+        method: 'session/prompt',
+        params: { sessionId: 'structured-root', contentBlocks: [{ type: 'text', text: 'return 42' }] },
+      })
+      await harness.waitForFrame(frame => frame.id === 'structured-prompt', 'structured prompt response')
+      await harness.waitForFrame(
+        frame => frame.method === 'session.status'
+          && (frame.params as { sessionId?: string; status?: string } | undefined)?.sessionId === 'structured-root'
+          && (frame.params as { status?: string } | undefined)?.status === 'idle',
+        'structured idle status',
+      )
+      harness.send({
+        jsonrpc: '2.0',
+        id: 'structured-output',
+        method: 'session/output',
+        params: { sessionId: 'structured-root' },
+      })
+      const output = await harness.waitForFrame(frame => frame.id === 'structured-output', 'structured output')
+      expect(output.result).toEqual({ available: true, structuredOutput: { answer: 42 } })
+      expect(llmServer.requests).toHaveLength(1)
     } finally {
       await harness.dispose()
       await rm(storageDir, { recursive: true, force: true })

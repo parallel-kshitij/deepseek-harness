@@ -1211,8 +1211,27 @@ Source: [`packages/lsp/lsp-stdio/src/index.ts:82`](../packages/lsp/lsp-stdio/src
 Requires: `tools`
 
 ```ts config-catalog
-/** Configuration for one stdio or Streamable HTTP MCP server. */
-export type Config = StdioConfig | StreamableHttpConfig
+/** Configuration for one direct MCP server or one host-resident MCP run. */
+export type Config = DirectConfig | HostBridgeConfig
+
+/** Configuration for one directly connected MCP server. */
+export type DirectConfig = StdioConfig | StreamableHttpConfig
+
+/** Configuration for the opaque-token, loopback host bridge transport. */
+export interface HostBridgeConfig {
+  /** Selects the opaque-token platform-host transport. */
+  transport: 'host-bridge'
+  /** Loopback HTTP origin of the platform host. Empty together with runToken disables the transport. */
+  baseUrl: string
+  /** Opaque per-run capability registered by the platform host. */
+  runToken: string
+  /** Bound for manifest discovery and each invocation. */
+  requestTimeoutMs: number
+  /** Maximum accepted response body after UTF-8 decoding. */
+  maxResponseBytes: number
+  /** Reject plugin activation rather than activating without proxy tools. */
+  failOnStartupError: boolean
+}
 
 /** Config for connecting to an MCP server via a spawned child process over stdio. */
 export interface StdioConfig {
@@ -1275,7 +1294,7 @@ export interface ReconnectConfig {
 }
 ```
 
-Source: [`packages/mcp/mcp-client/src/index.ts:98`](../packages/mcp/mcp-client/src/index.ts)
+Source: [`packages/mcp/mcp-client/src/index.ts:109`](../packages/mcp/mcp-client/src/index.ts)
 
 <a id="deepseek-aidsh-message-feedback"></a>
 
@@ -1426,6 +1445,28 @@ export type Config = LocalConfig
 Depends on: [`LocalConfig`](#deepseek-aidsh-pwsh-local)
 
 Source: [`packages/shell/pwsh-sandbox/src/index.ts:40`](../packages/shell/pwsh-sandbox/src/index.ts)
+
+<a id="deepseek-aidsh-read-gate-host-bridge"></a>
+
+## `@deepseek-ai/dsh-read-gate-host-bridge`
+
+Requires: `tools`
+
+```ts config-catalog
+/** Configuration for the loopback, advisory read-before-write bridge. */
+export interface Config {
+  /** Unauthenticated loopback origin of the host read-gate API; empty disables interception. */
+  baseUrl: string
+  /** Absolute workspace directory included in host policy requests. */
+  cwd: string
+  /** Time limit for each host check or refresh request. */
+  requestTimeoutMs: number
+  /** Maximum accepted UTF-8 JSON response size. */
+  maxResponseBytes: number
+}
+```
+
+Source: [`packages/guard/read-gate-host-bridge/src/index.ts:21`](../packages/guard/read-gate-host-bridge/src/index.ts)
 
 <a id="deepseek-aidsh-repeat-tool-reminder"></a>
 
@@ -2606,6 +2647,12 @@ export interface Config {
    */
   toolName?: string
   /**
+   * Optional model-facing purpose for this configured delegate. The normal
+   * provider context/capability wording is appended, so this names a profile
+   * without weakening the standalone-prompt or result-collection contract.
+   */
+  delegationDescription?: string
+  /**
    * Expose `run_in_background` (default true). Disabled instances omit the
    * parameter and reject forced background calls.
    */
@@ -2653,6 +2700,43 @@ export interface Config {
 Depends on: [`AgentOptions`](subsystems/core.md)
 
 Source: [`packages/subagent/tool-subagent/src/index.ts:29`](../packages/subagent/tool-subagent/src/index.ts)
+
+<a id="deepseek-aidsh-tool-subagent-profiles"></a>
+
+## `@deepseek-ai/dsh-tool-subagent-profiles`
+
+Requires: `tools` · `subagents` · `systemPrompt`
+
+```ts config-catalog
+/** Roster configuration. */
+export interface Config {
+  /** Registered subagent provider used by every named profile. */
+  provider: string
+  /** Absolute child delegation-depth cap, or provider-owned depth policy. */
+  maxDepth: number | 'provider-managed'
+  /** Fixed delegates materialized as distinctly named foreground tools. */
+  profiles: SubagentProfile[]
+}
+
+/** One fixed named child profile. */
+export interface SubagentProfile {
+  /** Stable roster identity shown in the model-facing tool name. */
+  id: string
+  /** Short purpose prepended to the ordinary delegation contract. */
+  description: string
+  /** Complete child-specific identity/instructions scoped to the child. */
+  persona: string
+  /** Optional global-tool filter applied only inside this child. */
+  toolFilter?: {
+    /** Global DSH tool names the child may use. */
+    allow?: string[]
+    /** Global DSH tool names removed from the child. */
+    deny?: string[]
+  }
+}
+```
+
+Source: [`packages/subagent/tool-subagent-profiles/src/index.ts:35`](../packages/subagent/tool-subagent-profiles/src/index.ts)
 
 <a id="deepseek-aidsh-tool-subagent-report"></a>
 
@@ -2966,6 +3050,28 @@ export interface Config {
 ```
 
 Source: [`packages/web/web-search-exa/src/index.ts:38`](../packages/web/web-search-exa/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-host-bridge"></a>
+
+## `@deepseek-ai/dsh-web-search-host-bridge`
+
+Requires: `web`
+
+```ts config-catalog
+/** Plugin configuration. Empty baseUrl + runToken disables registration. */
+export interface Config {
+  /** Unauthenticated loopback origin of the platform web bridge; empty with runToken disables registration. */
+  baseUrl: string
+  /** Opaque per-run capability registered by the platform host. */
+  runToken: string
+  /** Time limit for one hosted search request. */
+  requestTimeoutMs: number
+  /** Maximum accepted UTF-8 JSON response size. */
+  maxResponseBytes: number
+}
+```
+
+Source: [`packages/web/web-search-host-bridge/src/index.ts:22`](../packages/web/web-search-host-bridge/src/index.ts)
 
 <a id="deepseek-aidsh-web-search-perplexity"></a>
 

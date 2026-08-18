@@ -15,14 +15,22 @@ DeepSeek Harness SDK 运行时的共享协议格式（wire format）：一个按
 | 方向 | 方法 | 类型 |
 |---|---|---|
 | client→server | `initialize` | `InitializeParams` → `InitializeResult` |
+| client→server | `session/open` | `SessionOpenParams` → `SessionOpenResult` |
 | client→server | `session/prompt` | `SessionPromptParams` → `SessionPromptResult`（持久入队回执） |
+| client→server | `session/steer` | `SessionInputParams` → `SessionInputResult`（唤醒会话） |
+| client→server | `session/inject` | `SessionInputParams` → `SessionInputResult`（不唤醒空闲会话） |
+| client→server | `session/cancel` | `SessionCancelParams` → `{}` |
+| client→server | `session/output` | `SessionTargetParams` → `SessionOutputResult` |
+| client→server | `session/close` | `SessionTargetParams` → `SessionCloseResult` |
 | client→server | `shutdown` | 无参数 → `{}` |
 | server→client | `session.event` | `SessionEventNotification`（运行时内每个会话，不过滤） |
 | server→client | `session.status` | `SessionStatusNotification`（整个 agent（智能体）的 `running`/`idle` 转换） |
 | server→client | `subagent.started` | `SubagentStartedNotification` |
 | server→client | `subagent.finished` | `SubagentFinishedNotification`（仅进程内运行） |
 
-`HarnessSdkRequestMap` 与 `HarnessSdkNotificationMap` 按方法名索引这些类型。`SessionPromptResult.messageId` 标识已排队的 `UserMessage`；它不标识后续的助手消息、轮次结束或提示词结果。客户端根据自己对活动区间的所有权，组合持续开放的 `session.event` 流与 agent 级的 `session.status`。`SubagentFinishedNotification.lastAssistantMessage` 包含子 agent 最后一条非空 assistant 消息；若不存在这类消息，则包含其累积的 assistant 文本；子 agent 两种输出均未产生时，该字段缺省。`InitializeParams.maxTokens` 是可选的正的安全整数，用于限制 SDK 创建的 agent 及其进程内后代的每次对话模型输出；省略时会应用所选适配器的确切模型默认值，否则提供方行为保持不变。通知载荷类型依赖 `SessionEvent`（`dsh-session`）、`ContentBlock`（`dsh-llm`）与 `SubagentStopReason`（`dsh-subagent`）——协议以完整会话日志封套进行流式传输，因此会话词汇是协议格式约定的一部分。`serverInfo.name` 的协议值固定为 `deepseek-harness-sdk-runtime`。
+`HarnessSdkRequestMap` 与 `HarnessSdkNotificationMap` 按方法名索引这些类型。`session/open` 会在会话可被驱动之前发布一个全新或持久化恢复的 Agent，并可按会话限定提供方、模型、输出上限、推理强度、精确系统提示词、继承／全局工具允许列表，以及以对象为根的结构化输出 Schema。Schema 会安装会话本地的 `structured_output` 能力；它不会被错误地写入全局允许列表。`session/output` 只返回真正通过该工具流水线与 Schema 校验后提交的值。`session/close` 幂等，且只释放目标 Agent。
+
+`SessionPromptResult.messageId` 与 `SessionInputResult.messageId` 标识已排队的 `UserMessage`；它们不标识后续的助手消息、轮次结束或提示词结果。`steer` 会唤醒目标，而 `inject` 只为下一步补充上下文，不唤醒空闲 Agent。`cancel.keepInbox` 决定取消当前活动时是否保留排队工作。客户端根据自己对活动区间的所有权，组合持续开放的 `session.event` 流与 agent 级的 `session.status`。`SubagentFinishedNotification.lastAssistantMessage` 包含子 agent 最后一条非空 assistant 消息；若不存在这类消息，则包含其累积的 assistant 文本；子 agent 两种输出均未产生时，该字段缺省。`InitializeParams.maxTokens` 是可选的正的安全整数，用于限制 SDK 创建的 agent 及其进程内后代的每次对话模型输出；省略时会应用所选适配器的确切模型默认值，否则提供方行为保持不变。`InitializeParams.reasoningEffort` 提供进程级默认值，`session/open.reasoningEffort` 则可为单个 Agent 覆盖。通知载荷类型依赖 `SessionEvent`（`dsh-session`）、`ContentBlock`（`dsh-llm`）与 `SubagentStopReason`（`dsh-subagent`）——协议以完整会话日志封套进行流式传输，因此会话词汇是协议格式约定的一部分。`serverInfo.name` 的协议值固定为 `deepseek-harness-sdk-runtime`。
 
 ## 模型体验
 
@@ -35,5 +43,5 @@ DeepSeek Harness SDK 运行时的共享协议格式（wire format）：一个按
 ## 已知限制与暂缓事项
 
 - **无协议版本协商**——握手只携带 `serverInfo.version`（`0.0.1`，客户端不校验）；处于预发布阶段，无兼容承诺。
-- **无取消与会话关闭方法**——客户端放弃轮次的方式是关闭运行时进程；见 [`dsh-sdk-jsonrpc-server` README](../server/README.md)。
+- **无逐提示词结果对象**——提示词与输入方法只是入队回执；高层客户端拥有从回执到空闲的活动区间，并读取持久轮次结束事件。
 - **server→client 请求是未使用的功能**——传输层支持，但服务器从不发送；Python SDK 的应答接口为未来审批流程预留。
