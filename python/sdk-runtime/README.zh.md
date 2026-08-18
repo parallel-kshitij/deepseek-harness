@@ -15,7 +15,7 @@ Python SDK 的运行时载体包（分发名 `deepseek-harness-runtime-bin`，�
 
 exe 缺失时抛出 `FileNotFoundError`，并写明两种获取途径：在 deepseek-harness 检出中经 `scripts/build-exe-for-python-sdk.ts` 构建，或安装 `build-exe-for-python-sdk` CI 工作流生成的对应平台运行时 wheel 包。仅限开发的 node 载体缺失时只提示构建脚本这一条途径。该工作流只保留 wheel 包，不保留独立 exe 归档。获取策略与查找接口刻意分离，之后可以换成按需下载而不改动任何调用方。
 
-每个 wheel 包只包含一个运行时可执行文件。macOS wheel 包还包含与其匹配的原生 spawn helper；缺少伴随文件意味着该安装不完整，并会在启动时硬失败，即使所选 Cordis 组合不使用 PTY 工具也是如此。Linux wheel 包不包含 spawn helper，因为 `node-pty` 直接使用暂存的 `pty.node` 原生插件。固定标签为 `py3-none-manylinux_2_28_x86_64`、`py3-none-manylinux_2_28_aarch64` 与 `py3-none-macosx_14_0_arm64`；macOS 标签保守匹配内置 Node 24 可执行文件的 macOS 13.5 部署目标。本包的 `platforms.json` 统一定义仓库发行构建器与隔离构建钩子使用的固定标签和可执行文件名。构建钩子会拒绝 `py3-none-any`、不存在运行时文件、存在多个运行时文件、文件不可执行以及不支持的平台标签。仓库根目录的 `package.json` 为本包和 SDK 提供共同版本，`python-v<repository-version>` 发布标签必须与其匹配。
+每个 wheel 包只包含一个运行时可执行文件。macOS wheel 包还包含与其匹配的原生 spawn helper；缺少伴随文件意味着该安装不完整，并会在启动时硬失败，即使所选 Cordis 组合不使用 PTY 工具也是如此。Linux wheel 包不包含 spawn helper，因为 `node-pty` 直接使用暂存的 `pty.node` 原生插件。单可执行文件资产清单包含原生插件及其 `.dylib`、`.so` 和 `.dll` 共享库依赖，因此图片附件在打包后仍可加载。固定标签为 `py3-none-manylinux_2_28_x86_64`、`py3-none-manylinux_2_28_aarch64` 与 `py3-none-macosx_14_0_arm64`；macOS 标签保守匹配内置 Node 24 可执行文件的 macOS 13.5 部署目标。本包的 `platforms.json` 统一定义仓库发行构建器与隔离构建钩子使用的固定标签和可执行文件名。构建钩子会拒绝 `py3-none-any`、不存在运行时文件、存在多个运行时文件、文件不可执行以及不支持的平台标签。仓库根目录的 `package.json` 为本包和 SDK 提供共同版本，`python-v<repository-version>` 发布标签必须与其匹配。
 
 ## 解析 API
 
@@ -26,4 +26,18 @@ exe 缺失时抛出 `FileNotFoundError`，并写明两种获取途径：在 deep
 
 ## 零配置设计
 
-运行时二进制始终要求显式配置（`$DSH_CORDIS_CONFIG`，或作为 argv 位置参数的配置路径），缺了就报错退出——这一强制语义是运行时设计的一部分，本包不会弱化它。bin（`dsh-jsonrpc-agent`）只启动配置里列出的插件；对外服务接口（stdio JSON-RPC 服务器）也是其中一个条目（`@deepseek-ai/dsh-sdk-jsonrpc-server`），缺了它，启动出的 agent（智能体）就没有对外通道。本包检入的 `runtime/cordis.yml` 包含 JSON-RPC 服务条目、agent 核心、预载的 DeepSeek 适配器、JSONL 持久化、显式组合的语义检查点策略、本地 bash，以及用于有界加载工作区指令的本地文件系统提供方。持久化后端负责持久存储，独立的策略则选择请求、工具分发和已完成步骤的检查点。DeepSeek 适配器读取 `DEEPSEEK_API_KEY` 与 `DEEPSEEK_BASE_URL`，持久化、bash 和文件系统提供方则使用 `DSH_SESSION_ROOT` 和 `DSH_CWD`，并为手动运行提供回退值。调用方未使用任何显式配置通道时，`deepseek_harness` 客户端把该文件路径注入 `DSH_CORDIS_CONFIG`（注入条件见 [sdk README](https://github.com/deepseek-ai/deepseek-harness/blob/master/python/sdk/README.md)）。因此，零配置是包装层中一次显式、可见的参数传递，而不是运行时中的隐藏回退。
+运行时二进制始终要求显式配置（`$DSH_CORDIS_CONFIG`，或作为 argv 位置参数的配置路径），缺了就报错退出——这一强制语义是运行时设计的一部分，本包不会弱化它。bin（`dsh-jsonrpc-agent`）只启动配置里列出的插件；对外服务接口（stdio JSON-RPC 服务器）也是其中一个条目（`@deepseek-ai/dsh-sdk-jsonrpc-server`），缺了它，启动出的 agent（智能体）就没有对外通道。
+
+本包检入的 `runtime/cordis.yml` 是完整的本地编码 agent profile，而不是最小提示词演示。它组合：
+
+- JSON-RPC 服务条目与 DeepSeek 模型适配器；
+- 本地子进程执行、沙箱策略与沙箱 bash；
+- harness 身份、有界工作区指令、skill 发现、后台 shell 作业与 goal；
+- JSONL 会话持久化与语义检查点策略；
+- 本地附件、沙箱文件系统访问与观察、文件读写编辑，以及文件系统搜索；
+- 直接 MCP，以及可选的不透明令牌宿主 MCP／记忆桥；
+- 通过有界回环桥接的宿主网页搜索、先读后写策略和 Claude Code 命令 hook；
+- 带 persona、深度和工具过滤器的进程内通用及命名配置 subagent；
+- todo 跟踪、token 计量、上下文压缩与工具结果裁剪。
+
+持久化后端负责持久存储，独立的策略则选择请求、工具分发和已完成步骤的检查点。DeepSeek 适配器读取 `DEEPSEEK_API_KEY` 与 `DEEPSEEK_BASE_URL`；状态与工作区插件使用 `DSH_SESSION_ROOT`、`DSH_HOME` 和 `DSH_CWD`，并为手动运行提供回退值。部署 manifest 是经审计的闭包根：该 profile 中每个插件都是 `python/sdk-runtime/package.json` 的直接依赖，包括 `dsh-bash-sandbox`、`dsh-tool-fs-search`、`dsh-spill` 与 `dsh-attachment-local`。调用方未使用任何显式配置通道时，`deepseek_harness` 客户端把该文件路径注入 `DSH_CORDIS_CONFIG`（注入条件见 [sdk README](https://github.com/deepseek-ai/deepseek-harness/blob/master/python/sdk/README.md)）。因此，零配置是包装层中一次显式、可见的参数传递，而不是运行时中的隐藏回退。

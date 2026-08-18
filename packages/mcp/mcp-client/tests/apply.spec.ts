@@ -122,7 +122,7 @@ describe('mcp-client plugin module exports', () => {
       serverName: 'github-prod_1',
       command: 'echo',
     } as never)
-    expect(resolved.serverName).toBe('github-prod_1')
+    expect(resolved).toEqual(expect.objectContaining({ serverName: 'github-prod_1' }))
   })
 
   it('Config schema materializes reconnect defaults and merges partial overrides', () => {
@@ -131,7 +131,9 @@ describe('mcp-client plugin module exports', () => {
       serverName: 'srv',
       command: 'echo',
     } as never)
-    expect(omitted.reconnect).toEqual({ enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 })
+    expect(omitted).toEqual(expect.objectContaining({
+      reconnect: { enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 },
+    }))
 
     const partial = ConfigSchema({
       transport: 'stdio',
@@ -139,7 +141,9 @@ describe('mcp-client plugin module exports', () => {
       command: 'echo',
       reconnect: { initialDelayMs: 100 },
     } as never)
-    expect(partial.reconnect).toEqual({ enabled: true, initialDelayMs: 100, maxDelayMs: 30_000, maxAttempts: 10 })
+    expect(partial).toEqual(expect.objectContaining({
+      reconnect: { enabled: true, initialDelayMs: 100, maxDelayMs: 30_000, maxAttempts: 10 },
+    }))
   })
 
   it('Config schema rejects an invalid reconnect block', () => {

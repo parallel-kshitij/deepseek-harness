@@ -74,6 +74,14 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
   }
 
   transport.onRequest(async (method, params) => {
+    // Loader entries activate concurrently. The stdio transport can receive an
+    // initialize/session request as soon as this synchronous plugin starts,
+    // while a sibling async plugin (for example the host MCP bridge) is still
+    // discovering and registering capabilities. Gate every request on the
+    // current loader generation so session/open observes the complete global
+    // tool registry and startup failures surface before work is admitted.
+    const loader = ctx.get('loader') as { await(): Promise<void> } | undefined
+    await loader?.await()
     const result = await server.handleRequest(method, params)
     if (method === 'shutdown') {
       // Run after the handler result is written; the task then flushes, disposes, and exits.

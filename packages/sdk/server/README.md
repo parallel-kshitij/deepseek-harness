@@ -6,7 +6,7 @@ The `jsonrpc` plugin serves newline-delimited JSON-RPC over stdio so out-of-proc
 
 ## Wiring
 
-`inject: ['agents']`. The server gets or creates one agent per `sessionId`. It forwards subagent completions only when the service-snapshotted lifecycle `local` flag is true; provider names, child ids, and durable lineage never establish locality. A registered adapter wins, an unowned `deepseek-official` route mounts `dsh-llm-deepseek`, and any other unowned provider fails initialization. Other capabilities come from the surrounding `cordis.yml`.
+`inject: ['agents']`. The server gets or creates one agent per `sessionId`. Explicit `session/open` composes the Agent before publication; lazy creation through `session/prompt` remains available for callers that need only deployment defaults. It forwards subagent completions only when the service-snapshotted lifecycle `local` flag is true; provider names, child ids, and durable lineage never establish locality. A registered adapter wins, an unowned `deepseek-official` route mounts `dsh-llm-deepseek`, and any other unowned provider fails initialization. Other capabilities come from the surrounding `cordis.yml`.
 
 ## Config
 
@@ -22,7 +22,9 @@ The plugin answers `shutdown`, flushes the response, disposes the root context s
 
 ## Wire notes
 
-`initialize.serverInfo.name` is the wire-stable `deepseek-harness-sdk-runtime`. An optional positive `initialize.maxTokens` becomes the request output cap of each SDK-created agent and its in-process descendants; invalid values reject initialization, while omission sends no SDK cap and allows the selected adapter or provider route default to apply. `session/prompt` queues one identified user message and immediately returns `{ messageId }`. The server streams every durable fact as `session.event` and every whole-agent lifecycle transition as `session.status`; it does not assign an assistant message or `turn/end` to that prompt. Independent requests may enqueue more work on the same session. Persistence roots and persona come from `cordis.yml`.
+`initialize.serverInfo.name` is the wire-stable `deepseek-harness-sdk-runtime`. Optional positive `maxTokens` and non-empty `reasoningEffort` values become process defaults. `session/open` may override provider, model, output cap, and reasoning effort; install an exact agent-scoped system prompt; restrict inherited/global tools; attach an object-rooted JSON Schema; and create or resume the named persisted session. Restrictions are validated by the tool runtime: unknown global names fail session creation, while the schema-bound `structured_output` tool stays session-local and therefore remains available under an explicit allowlist.
+
+`session/prompt`, `session/steer`, and `session/inject` each return a durable `{ messageId }` receipt. Prompt and steer wake their target; injection does not wake an idle Agent. `session/cancel` aborts one Agent and optionally keeps its inbox. `session/output` reads a committed schema-valid value, and `session/close` removes and disposes one owned Agent without affecting siblings. The server streams every durable fact as `session.event` and every whole-agent lifecycle transition as `session.status`; it does not assign an assistant message or `turn/end` to one enqueue receipt. Persistence roots and baseline persona still come from `cordis.yml`.
 
 ## Model Experience
 
@@ -40,9 +42,22 @@ Data-dependent user-message tokens enter retained session history and are resent
 
 Append-only; newly visible content follows the reusable request prefix and does not invalidate existing KV-cache entries.
 
+### Per-session composition
+
+#### What the model sees
+
+When supplied, `session/open.systemPrompt` replaces the deployment persona section for that Agent. `allowedTools` removes unlisted inherited/global tool schemas and execution capabilities. `outputSchema` adds the scoped `structured_output` schema plus its completion instruction; a successful call concludes the turn and makes the validated value readable only through `session/output`.
+
+#### Token effect
+
+The selected system prompt, surviving tool schemas, and optional structured-output instruction/schema are fixed per-session request-prefix costs. User, assistant, and tool-result content remains data-dependent durable history.
+
+#### KV Cache effect
+
+Stable for later steps of the same session. Changing persona, tools, model selection, reasoning effort, or output schema requires opening a differently composed Agent and may invalidate the affected prefix.
+
 ## Known Limitations and Deferred Work
 
-- **The wire has no per-session close or prompt-cancel method** — SDK-created agents remain live until process shutdown.
 - **There is no per-prompt result** — `MessageId` identifies inbox admission only; clients that own an automation interval must define and observe that interval themselves.
 - **stdout purity is deployment-enforced** — a surrounding config can still load a stdout logger and corrupt the JSON-RPC channel; this plugin does not inspect or veto sibling loggers.
 - **Automatic adapter mounting is DeepSeek-specific** — `initialize` can reuse any pre-registered model adapter, but its only fallback mounts `dsh-llm-deepseek`.

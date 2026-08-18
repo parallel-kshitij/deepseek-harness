@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-MCP client bridge plugin: connects to external [Model Context Protocol](https://modelcontextprotocol.io/) servers and registers their tools on `ctx.tools`, making them available to the model as native tools under server-qualified names (`mcp__<serverName>__<rawName>`).
+MCP client bridge plugin: connects directly to external [Model Context Protocol](https://modelcontextprotocol.io/) servers or proxies a host-owned per-run MCP generation, then registers its tools on `ctx.tools` under server-qualified names (`mcp__<serverName>__<rawName>`).
 
 ## Usage
 
@@ -27,9 +27,19 @@ One plugin instance per MCP server in `cordis.yml`:
     url: http://localhost:3000/mcp
     headers:
       Authorization: !!js '`Bearer ${process.env.MCP_TOKEN}`'
+
+- id: mcp-platform-host
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    transport: host-bridge
+    baseUrl: !!js process.env.DSH_MCP_BRIDGE_URL ?? ''
+    runToken: !!js process.env.DSH_MCP_RUN_TOKEN ?? ''
+    failOnStartupError: true
 ```
 
 The model sees `mcp__github__create_issue`, `mcp__web__search`, … — the same server-qualified shape Claude Code and Codex use. HMR hot-swaps: editing the entry triggers disconnect + reconnect without process restart; an unchanged `serverName` reproduces identical tool names.
+
+`host-bridge` is the multi-server platform mode. DSH fetches one secret-free, denied-filtered manifest from `POST /bridge/mcp/manifest` and sends calls to `POST /bridge/mcp/invoke`; the host retains server objects, credentials, and transport policy. The opaque capability token is accepted only over loopback HTTP. Empty `baseUrl` and `runToken` disable the bridge together.
 
 ## Config
 
@@ -50,6 +60,8 @@ The model sees `mcp__github__create_issue`, `mcp__web__search`, … — the same
 | `reconnect.maxDelayMs` | both | no | Backoff ceiling in ms; also the uptime after which the attempt budget resets (default 30000) |
 | `reconnect.maxAttempts` | both | no | Consecutive failed attempts per outage before giving up for good (default 10) |
 
+For `host-bridge`, `baseUrl` and `runToken` select the loopback host generation; `requestTimeoutMs` defaults to 60000, `maxResponseBytes` defaults to 16777216, and `failOnStartupError` has the same activation meaning. Direct-only fields (`serverName`, commands, URLs, headers, and reconnect policy) do not apply.
+
 ## Tool naming
 
 Every MCP tool has two names: the raw MCP name (sent on the wire in `tools/call`) and the public name `mcp__<serverName>__<rawName>` registered on `ctx.tools`. Public names are normalized to the DeepSeek function-name contract (64 chars, `[A-Za-z0-9_-]`); when replacement or truncation changes the name, a deterministic 12-hex-char hash of `(serverName, rawName)` is appended so distinct tools never collapse into one name. Names are pure functions of `(serverName, rawName)` — connection order, re-syncs, and other servers never rename a tool.
@@ -69,6 +81,7 @@ Every MCP tool has two names: the raw MCP name (sent on the wire in `tools/call`
 - On disconnect/crash: the supervisor restarts the original server config with exponential backoff (`reconnect.initialDelayMs` doubling up to `reconnect.maxDelayMs`) and re-runs discovery on success — the recovered generation replaces the previous one, so tools neither duplicate nor leak. During the outage the last good generation stays registered; calls against it fail until recovery.
 - Reconnection is budgeted per outage: after `reconnect.maxAttempts` consecutive failures the server's tools are unregistered and reconnection stops until an HMR reload or Host restart. A connection that survives past `maxDelayMs` resets the budget, so an occasionally-crashing server recovers indefinitely while a crash-looping one — even with briefly successful connects — still exhausts the cap instead of restarting forever.
 - Reconnect states are user-visible in logs: reconnecting (warn, with attempt count and delay), recovered (info), final failure and disabled-loss (error). Disposal cancels any pending reconnect. With `reconnect.enabled: false`, a lost connection keeps tools registered but failing until a reload — the manual-recovery behavior.
+- In host-bridge mode, manifest registration is atomic: invalid identities, duplicate normalized names, or foreign registry conflicts roll back the whole generation. Disposal unregisters every proxy tool; a host denial becomes an ordinary tool error.
 
 ## Services consumed
 
@@ -111,6 +124,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 ## Known Limitations and Deferred Work
 
 - **Tools are the only bridged MCP capability** — Resources and Prompts have no harness consumer and are deferred.
+- **The host bridge is loopback-only** — remote platform bridges require an authenticated transport rather than exposing the opaque run token off-host.
 - **Startup timeout is inherited from the MCP SDK** — DSH does not yet expose a connection/discovery timeout. Each initialize or paginated `tools/list` request uses the SDK's 60-second default, so an unresponsive server or cursor chain can delay both activation and teardown while the initial synchronization settles.
 - **Reconnect triggers on transport close** — a crashed stdio child fires it; Streamable HTTP failures surface per request and through the SDK transport's own SSE-stream recovery, so an unreachable HTTP server is retried per call rather than respawned by the supervisor.
 - **Image is the only durable rich-result bridge** — PNG, JPEG, WebP, and GIF can enter Native context after exact capability proof. Audio and embedded-resource payloads remain execution-local with explicit diagnostics, while resource links preserve only their name and URI as text.

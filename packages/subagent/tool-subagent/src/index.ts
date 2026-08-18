@@ -35,6 +35,12 @@ export interface Config {
    */
   toolName?: string
   /**
+   * Optional model-facing purpose for this configured delegate. The normal
+   * provider context/capability wording is appended, so this names a profile
+   * without weakening the standalone-prompt or result-collection contract.
+   */
+  delegationDescription?: string
+  /**
    * Expose `run_in_background` (default true). Disabled instances omit the
    * parameter and reject forced background calls.
    */
@@ -81,6 +87,7 @@ export interface Config {
 export const Config: z<Config> = z.object({
   provider: z.string().required(),
   toolName: z.string().default('subagent'),
+  delegationDescription: z.string(),
   enableRunInBackground: z.boolean().default(true),
   backgroundMode: z.union(['one-shot', 'continuable'] as const).default('one-shot'),
   // Prevent Schemastery from materializing omitted agentOptions as `{}`.
@@ -267,6 +274,9 @@ function resolveDelegationRun(
 }
 
 export function apply(ctx: Context, config: Config): void {
+  if (config.delegationDescription !== undefined && config.delegationDescription.trim().length === 0) {
+    throw new Error('tool-subagent: `delegationDescription` must be non-empty when configured')
+  }
   // Direct apply() bypasses Schemastery's numeric constraints. A direct-apply
   // omission stays capless (the schema default only runs through the loader).
   if (config.maxDepth !== 'provider-managed') assertSubagentMaxDepth(config.maxDepth)
@@ -298,7 +308,9 @@ export function apply(ctx: Context, config: Config): void {
     }
     disposeTool = ctx.tools.register(defineTool({
       name: toolName,
-      description: wording.description + (backgroundEnabled
+      description: (config.delegationDescription === undefined
+        ? wording.description
+        : `${config.delegationDescription.trim()} ${wording.description}`) + (backgroundEnabled
         // The completion notice is the continuation service's own behavior, not
         // a separately installed capability, so this promise holds whenever the
         // continuable background path is reachable at all.

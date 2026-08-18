@@ -1,5 +1,5 @@
 /**
- * Named wire types for the DeepSeek Harness SDK runtime protocol: the three
+ * Named wire types for the DeepSeek Harness SDK runtime protocol: the typed
  * request/result pairs and the four server-to-client notification payloads
  * exchanged over the newline-delimited JSON-RPC stdio transport. The server
  * plugin (`@deepseek-ai/dsh-sdk-jsonrpc-server`) and SDK clients share these shapes;
@@ -22,6 +22,8 @@ export interface InitializeParams {
   model: string
   /** Optional positive output-token cap inherited by SDK-created agents and their in-process descendants. */
   maxTokens?: number
+  /** Optional adapter-owned reasoning effort inherited by SDK-created agents. */
+  reasoningEffort?: string
 }
 
 /** Wire-stable server identity returned by initialization. */
@@ -42,6 +44,80 @@ export interface SessionPromptParams {
 export interface SessionPromptResult {
   /** Identity of the queued user message. */
   messageId: string
+}
+
+/** Per-session composition applied before a new or resumed Agent is published. */
+export interface SessionOpenParams {
+  /** Stable session identity to create or recover from the configured persistence backend. */
+  sessionId: string
+  /** Load an existing persisted session instead of creating a fresh log. */
+  resume?: boolean
+  /** Optional provider route overriding the process-wide initialized route. */
+  provider?: string
+  /** Optional model overriding the process-wide initialized model. */
+  model?: string
+  /** Optional positive output-token cap overriding the process-wide initialized cap. */
+  maxTokens?: number
+  /** Optional adapter-owned reasoning effort overriding the process-wide initialized effort. */
+  reasoningEffort?: string
+  /** Exact system prompt for this Agent; omission preserves deployment composition. */
+  systemPrompt?: string
+  /** Exact global-tool allowlist for this Agent; unknown names fail session creation. */
+  allowedTools?: string[]
+  /** Optional object-rooted JSON Schema for this session's authoritative structured output. */
+  outputSchema?: Record<string, unknown>
+}
+
+/** Result of publishing one explicitly opened SDK session. */
+export interface SessionOpenResult {
+  /** Stable identity shared by the live Agent and session log. */
+  sessionId: string
+  /** Whether the live Agent was created from a new log or recovered from persistence. */
+  disposition: 'created' | 'resumed'
+}
+
+/** Identified next-step input for a live SDK session. */
+export interface SessionInputParams {
+  /** Target live SDK session. */
+  sessionId: string
+  /** Content blocks delivered verbatim in the identified user message. */
+  contentBlocks: ContentBlock[]
+}
+
+/** Durable enqueue receipt for steering or injected context. */
+export interface SessionInputResult {
+  /** Identity of the queued user message. */
+  messageId: string
+  /** True when steering woke an Agent that was idle at admission time. */
+  wokeIdle?: boolean
+}
+
+/** Queue-aware cancellation of one live SDK session. */
+export interface SessionCancelParams {
+  /** Target live SDK session. */
+  sessionId: string
+  /** Preserve pending inbox work while aborting the active activity. */
+  keepInbox?: boolean
+}
+
+/** Parameters for a method targeting one live SDK session. */
+export interface SessionTargetParams {
+  /** Target live SDK session. */
+  sessionId: string
+}
+
+/** Idempotent per-session close result. */
+export interface SessionCloseResult {
+  /** True when this call owned and disposed a live server session. */
+  closed: boolean
+}
+
+/** Current authoritative structured-output state for one session. */
+export interface SessionOutputResult {
+  /** Whether the scoped structured-output tool has committed a valid value. */
+  available: boolean
+  /** Committed JSON value; present exactly when `available` is true. */
+  structuredOutput?: unknown
 }
 
 /** Deployment-mapped SDK outcome: `ok` for an accepted result, `error` otherwise. */
@@ -100,6 +176,12 @@ export interface HarnessSdkNotificationMap {
 /** Client-to-server request methods with their param and result shapes. */
 export interface HarnessSdkRequestMap {
   'initialize': { params: InitializeParams; result: InitializeResult }
+  'session/open': { params: SessionOpenParams; result: SessionOpenResult }
   'session/prompt': { params: SessionPromptParams; result: SessionPromptResult }
+  'session/steer': { params: SessionInputParams; result: SessionInputResult }
+  'session/inject': { params: SessionInputParams; result: SessionInputResult }
+  'session/cancel': { params: SessionCancelParams; result: Record<string, never> }
+  'session/output': { params: SessionTargetParams; result: SessionOutputResult }
+  'session/close': { params: SessionTargetParams; result: SessionCloseResult }
   'shutdown': { params: undefined; result: Record<string, never> }
 }

@@ -794,11 +794,44 @@ export async function boot(
     // deepest cause is the plugin's own thrown error, whose stack names the
     // real failure site — append it so the startup diagnostic preserves the
     // original activation error instead of only the wrap chain.
-    let deepest: unknown = cause
-    while (deepest instanceof Error && deepest.cause !== undefined) deepest = deepest.cause
-    const stack = deepest instanceof Error && deepest !== cause ? `\n${deepest.stack ?? deepest.message}` : ''
-    throw new Error(`${binName}: ${stage}: ${detail}${stack}`, { cause })
+    const nested = formatNestedLoadErrors(cause)
+    throw new Error(`${binName}: ${stage}: ${detail}${nested}`, { cause })
   }
+}
+
+/**
+ * Preserve every failing Loader branch in a startup diagnostic.
+ *
+ * Loader groups activate entries concurrently and surface sibling failures as
+ * an AggregateError. Walking only Error.cause stops at that aggregate and
+ * renders Node's opaque `[errors]: [Array]`, hiding the actual plugin names.
+ * This bounded, cycle-safe traversal keeps the public top-level message stable
+ * and appends the nested stacks that operators need to repair a packaged or
+ * sandbox-only load failure.
+ */
+function formatNestedLoadErrors(root: unknown): string {
+  const seen = new Set<unknown>([root])
+  const rendered: string[] = []
+
+  const visit = (value: unknown, label: string): void => {
+    if (value === undefined || value === null || seen.has(value)) return
+    seen.add(value)
+    if (value instanceof Error) {
+      rendered.push(`${label}: ${value.stack ?? value.message}`)
+      if (value instanceof AggregateError) {
+        value.errors.slice(0, 20).forEach((error, index) => visit(error, `${label}.errors[${index}]`))
+      }
+      visit(value.cause, `${label}.cause`)
+      return
+    }
+    rendered.push(`${label}: ${String(value)}`)
+  }
+
+  if (root instanceof AggregateError) {
+    root.errors.slice(0, 20).forEach((error, index) => visit(error, `errors[${index}]`))
+  }
+  if (root instanceof Error) visit(root.cause, 'cause')
+  return rendered.length === 0 ? '' : `\n${rendered.join('\n')}`
 }
 
 /** Prompt-section name for the harness-source location line an app bin adds after boot. */

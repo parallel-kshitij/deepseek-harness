@@ -30,3 +30,17 @@ class ServerInfo(BaseModel):
 
 class InitializeResponse(BaseModel):
     serverInfo: ServerInfo | None = None
+
+
+class SessionOpenResponse(BaseModel):
+    sessionId: str
+    disposition: str
+
+
+class SessionCloseResponse(BaseModel):
+    closed: bool
+
+
+class SessionOutputResponse(BaseModel):
+    available: bool
+    structuredOutput: object | None = None

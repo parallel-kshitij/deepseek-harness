@@ -59,6 +59,7 @@ import * as ToolSessionQuery from '@deepseek-ai/dsh-tool-session-query'
 import * as ToolTasks from '@deepseek-ai/dsh-tool-jobs'
 import * as ToolTodo from '@deepseek-ai/dsh-tool-todo'
 import * as ToolSubagent from '@deepseek-ai/dsh-tool-subagent'
+import * as ToolSubagentProfiles from '@deepseek-ai/dsh-tool-subagent-profiles'
 import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import VmWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import * as ToolRalph from '@deepseek-ai/dsh-tool-ralph'
@@ -449,6 +450,29 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'The registered tool name is the load-time `toolName` config (default `subagent`); the schema above is that default. The shipped compositions load this package once per subagent backend, so the model additionally sees `subagent_fork` bound to the fork backend. Each instance\'s description, `run_in_background` parameter, and system-prompt policy follow its own `backgroundMode` and `enableRunInBackground`, so the two shipped schemas are not identical: `subagent` is `continuable` and defaults omitted calls to background with automatic settlement delivery, while `subagent_fork` stays `one-shot` and defaults them to foreground — see `packages/bundle/base/cordis.patch.yml` and `examples/acp-agent/cordis.yml`.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-tool-subagent-profiles',
+    dir: 'tool-subagent-profiles',
+    source: 'packages/subagent/tool-subagent-profiles/src/index.ts',
+    requires: ['ctx.tools', 'ctx.subagents', 'ctx.systemPrompt'],
+    writes: ['tool/call', 'tool/result', 'child session events through the chosen provider'],
+    shippedNames: ['subagent__<profile-id>'],
+    async mount(ctx) {
+      await ctx.plugin(SubagentRuntime)
+      registerCatalogSubagentProvider(ctx, 'mock')
+      await ctx.plugin(ToolSubagentProfiles, {
+        provider: 'mock',
+        maxDepth: 3,
+        profiles: [{
+          id: 'reviewer',
+          description: 'Review implementation correctness and simplicity.',
+          persona: 'You are a strict code reviewer.',
+        }],
+      })
+    },
+    note:
+      'The schema above is one representative profile. Runtime config materializes one foreground tool per profile under deterministic `subagent__<profile-id>` normalization; each tool fixes its own purpose, child persona, depth cap, and optional tool filter.',
   },
   {
     pkg: '@deepseek-ai/dsh-tool-subagent-control',

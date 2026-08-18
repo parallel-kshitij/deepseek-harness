@@ -52,4 +52,26 @@ export async function runJsonrpcAgent(bareModuleBaseUrl?: string): Promise<void>
   process.on('SIGTERM', () => { void disposeAndExit(0) })
   process.on('SIGINT', () => { void disposeAndExit(130) })
 }
+
+/**
+ * Process entrypoint wrapper for deterministic startup failure semantics.
+ *
+ * A Loader failure can happen after a surface has installed active handles.
+ * Relying on Node's default top-level rejection behavior then leaves some
+ * packaged runtimes alive with no JSON-RPC server, so their host observes only
+ * a request timeout.  Entry bins use this wrapper to report the real boot
+ * error and exit immediately; {@link installFailLoud} remains responsible for
+ * later, genuinely unhandled plugin failures after boot.
+ * @param bareModuleBaseUrl - installed-runtime base for bare plugins.
+ */
+export async function runJsonrpcAgentOrExit(bareModuleBaseUrl?: string): Promise<void> {
+  try {
+    await runJsonrpcAgent(bareModuleBaseUrl)
+  } catch (error) {
+    process.stderr.write(
+      `${NAME}: fatal startup failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+    )
+    process.exit(1)
+  }
+}
 /* v8 ignore stop */

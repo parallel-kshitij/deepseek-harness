@@ -18,6 +18,10 @@ import {
   JsonRpcResponseError,
   type InitializeParams,
   type InitializeResult,
+  type SessionCloseResult,
+  type SessionOpenParams,
+  type SessionOpenResult,
+  type SessionOutputResult,
   type SessionPromptParams,
 } from '@deepseek-ai/dsh-sdk-protocol'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -54,7 +58,7 @@ export class RequestTimeoutError extends Error {
 
 /**
  * The runtime answered outside its documented protocol (for example a
- * `session/prompt` response without `accepted: true`).
+ * `session/prompt` response without a durable message id).
  */
 export class SdkProtocolError extends Error {
   /** @param message - the protocol violation description. */
@@ -285,6 +289,95 @@ export class HarnessClient {
     const result = await this.request('session/prompt', { ...params })
     if (!isRecord(result) || typeof result.messageId !== 'string') {
       throw new SdkProtocolError(`session/prompt returned no message id: ${JSON.stringify(result)}`)
+    }
+    return result.messageId
+  }
+
+  /**
+   * Publish one explicitly configured fresh or persisted session.
+   * @param params - explicit session identity, route, and scoped composition.
+   * @returns accepted session identity and create/resume disposition.
+   */
+  async openSession(params: SessionOpenParams): Promise<SessionOpenResult> {
+    const result = await this.request('session/open', { ...params })
+    if (!isRecord(result) || result.sessionId !== params.sessionId
+      || (result.disposition !== 'created' && result.disposition !== 'resumed')) {
+      throw new SdkProtocolError(`session/open returned an invalid result: ${JSON.stringify(result)}`)
+    }
+    return { sessionId: result.sessionId, disposition: result.disposition }
+  }
+
+  /**
+   * Queue next-step steering and wake the target session.
+   * @param sessionId - target live session.
+   * @param contentBlocks - steering message content.
+   * @returns durable queued-message identity.
+   */
+  steer(sessionId: string, contentBlocks: ContentBlock[]): Promise<string> {
+    return this.input('session/steer', sessionId, contentBlocks)
+  }
+
+  /**
+   * Queue next-step context without waking an idle target session.
+   * @param sessionId - target live session.
+   * @param contentBlocks - injected message content.
+   * @returns durable queued-message identity.
+   */
+  inject(sessionId: string, contentBlocks: ContentBlock[]): Promise<string> {
+    return this.input('session/inject', sessionId, contentBlocks)
+  }
+
+  /**
+   * Cancel one live session without terminating the runtime process.
+   * @param sessionId - target live session.
+   * @param keepInbox - preserve queued follow-ups when true.
+   * @returns settlement after cancellation is accepted.
+   */
+  async cancelSession(sessionId: string, keepInbox = false): Promise<void> {
+    const result = await this.request('session/cancel', { sessionId, keepInbox })
+    if (!isRecord(result) || Object.keys(result).length > 0) {
+      throw new SdkProtocolError(`session/cancel returned a non-empty result: ${JSON.stringify(result)}`)
+    }
+  }
+
+  /**
+   * Read the current authoritative structured-output capture.
+   * @param sessionId - target live session.
+   * @returns current capture availability and value.
+   */
+  async sessionOutput(sessionId: string): Promise<SessionOutputResult> {
+    const result = await this.request('session/output', { sessionId })
+    if (!isRecord(result) || typeof result.available !== 'boolean'
+      || (result.available && !Object.hasOwn(result, 'structuredOutput'))
+      || (!result.available && Object.hasOwn(result, 'structuredOutput'))) {
+      throw new SdkProtocolError(`session/output returned an invalid result: ${JSON.stringify(result)}`)
+    }
+    return result.available
+      ? { available: true, structuredOutput: result.structuredOutput }
+      : { available: false }
+  }
+
+  /**
+   * Dispose one live session while preserving the runtime and its siblings.
+   * @param sessionId - target session identity.
+   * @returns whether a live session was closed.
+   */
+  async closeSession(sessionId: string): Promise<SessionCloseResult> {
+    const result = await this.request('session/close', { sessionId })
+    if (!isRecord(result) || typeof result.closed !== 'boolean') {
+      throw new SdkProtocolError(`session/close returned an invalid result: ${JSON.stringify(result)}`)
+    }
+    return { closed: result.closed }
+  }
+
+  private async input(
+    method: 'session/steer' | 'session/inject',
+    sessionId: string,
+    contentBlocks: ContentBlock[],
+  ): Promise<string> {
+    const result = await this.request(method, { sessionId, contentBlocks })
+    if (!isRecord(result) || typeof result.messageId !== 'string') {
+      throw new SdkProtocolError(`${method} returned no message id: ${JSON.stringify(result)}`)
     }
     return result.messageId
   }

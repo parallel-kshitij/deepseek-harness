@@ -26,7 +26,7 @@ import { CallId, LlmAdapter, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { apply } from '@deepseek-ai/dsh-mcp-client/src/index.ts'
 import { publicToolName } from '@deepseek-ai/dsh-mcp-client/src/tools.ts'
-import type { Config } from '@deepseek-ai/dsh-mcp-client'
+import type { Config, DirectConfig, ReconnectConfig } from '@deepseek-ai/dsh-mcp-client'
 
 const testToolSignal = new AbortController().signal
 
@@ -240,7 +240,7 @@ describe('fixture server — disposal', () => {
 })
 
 describe('fixture server — crash recovery', () => {
-  function crashConfig(serverName: string, reconnect: NonNullable<Config['reconnect']>): Config {
+  function crashConfig(serverName: string, reconnect: ReconnectConfig): DirectConfig {
     return {
       transport: 'stdio',
       serverName,

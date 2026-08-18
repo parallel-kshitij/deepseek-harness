@@ -1,49 +1,205 @@
-# Bundled default config. The runtime still requires an explicit
-# $DSH_CORDIS_CONFIG or argv path; the SDK injects this path for bundled
-# zero-config launches. SDK-set session-root and cwd variables have manual-run fallbacks.
+# Bundled coding-agent composition. The Python SDK injects this checked-in file
+# only when the caller did not select another Cordis config. Secrets remain in
+# their source environment variables; cwd/session/policy inputs have manual-run
+# fallbacks so the same file is useful outside the wrapper.
 
-# Stdio JSON-RPC server entry; without it the agent has no SDK client.
 - id: sdk-jsonrpc-server
   name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
 
-# Agent spine; the SDK server creates agents per sessionId.
-- id: agent-core
-  name: '@deepseek-ai/dsh-agent-spine-demo'
-  config:
-    workspaceContext:
-      maxBytes: 65536
-
-# Stock DeepSeek adapters. The adapter resolves DEEPSEEK_API_KEY through the
-# credential seam and, with no provider mounted here, from the launching
-# environment; DEEPSEEK_BASE_URL follows the same environment ladder. Neither
-# is inlined, so this file names no secret and no route.
 - id: llm-deepseek
   name: '@deepseek-ai/dsh-llm-deepseek'
 
-# JSONL persistence; $DSH_SESSION_ROOT wins over ./.sessions in the process cwd.
+# Shell execution is routed through the local sandbox service. The SDK may
+# narrow this further with DSH_PERMISSION_MODE; the default never requests a
+# policy broader than workspace-write.
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+    workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: bash
+  name: '@deepseek-ai/dsh-bash-sandbox'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    timeoutMs: 300000
+
+- id: read-gate-host-bridge
+  name: '@deepseek-ai/dsh-read-gate-host-bridge'
+  config:
+    baseUrl: !!js process.env.DSH_READGATE_BRIDGE_URL ?? ''
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    requestTimeoutMs: 5000
+    maxResponseBytes: 262144
+
+# Run the command-hook subset of a workspace's Claude Code settings on DSH's
+# typed interception points. A missing file is contained by the bridge.
+- id: hooks-claude-code
+  name: '@deepseek-ai/dsh-hooks-claude-code'
+  config:
+    configPath: !!js process.env.DSH_CLAUDE_SETTINGS_PATH ?? `${process.env.DSH_CWD ?? process.cwd()}/.claude/settings.json`
+    projectDir: !!js process.env.DSH_CWD ?? process.cwd()
+    defaultTimeoutMs: 600000
+    stderrSummaryMaxChars: 500
+
+# The spine composes identity, workspace instructions, filesystem skills,
+# persistent background shell jobs, and goals into every SDK-owned session.
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    includeHarnessIdentity: true
+    includeRuntimeContext: true
+    workspaceContext:
+      maxBytes: 65536
+    skills:
+      enabled: true
+    toolBash:
+      enableRunInBackground: true
+    toolJobs: {}
+    goals: {}
+
+# The stable session id is also the persistence key. Explicit checkpoint
+# policy selects request, tool-dispatch, and completed-step durability points.
 - id: sessions
   name: '@deepseek-ai/dsh-session-persistence-jsonl'
   config:
     root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
 
-# Persistence owns durable storage; this separate policy explicitly selects
-# the request, tool-dispatch, and completed-step durability checkpoints.
 - id: session-checkpoints
   name: '@deepseek-ai/dsh-session-checkpoint-policy'
 
-# Local bash executor; $DSH_CWD wins over the process cwd.
-# Managed child-process groups for the bash executor (spawn/kill/output plumbing).
-- id: subprocess
-  name: '@deepseek-ai/dsh-subprocess-local'
+# Durable content-addressed image storage enables tool-fs's composition-gated
+# read_image tool. DSH_HOME is SDK-scoped; manual launches use the normal home.
+- id: attachment-local
+  name: '@deepseek-ai/dsh-attachment-local'
 
-- id: bash
-  name: '@deepseek-ai/dsh-bash-local'
+# Sandboxed workspace access plus bounded model-facing read/write/edit/search
+# tools. Observation policy records file activity in the durable event stream.
+- id: fs-sandbox
+  name: '@deepseek-ai/dsh-fs-sandbox'
   config:
     cwd: !!js process.env.DSH_CWD ?? process.cwd()
 
-# Local filesystem provider for workspace instruction loading. This does not
-# expose model-facing file tools by itself.
-- id: fs-local
-  name: '@deepseek-ai/dsh-fs-local'
+- id: fs-observation-policy
+  name: '@deepseek-ai/dsh-fs-observation-policy'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+# Claude-compatible literal editing surface in addition to DSH's concise
+# read/write/edit tools; both share the same sandboxed filesystem service.
+- id: tool-str-replace-editor
+  name: '@deepseek-ai/dsh-tool-str-replace-editor'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
   config:
-    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    sampleOverCapGlobResults: false
+
+# Optional platform-hosted MCP/memory tools. Empty env values are the explicit
+# disabled state; configured runs fail activation if their opaque capability
+# cannot be resolved, so requested tools are never silently dropped.
+- id: mcp-host-bridge
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    transport: host-bridge
+    baseUrl: !!js process.env.DSH_MCP_BRIDGE_URL ?? ''
+    runToken: !!js process.env.DSH_MCP_RUN_TOKEN ?? ''
+    requestTimeoutMs: 60000
+    maxResponseBytes: 16777216
+    failOnStartupError: true
+
+# Optional platform-owned current-information search. The provider keeps its
+# credential and tenant budget host-side; DSH receives an opaque capability.
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: host-bridge
+
+- id: web-search-host-bridge
+  name: '@deepseek-ai/dsh-web-search-host-bridge'
+  config:
+    baseUrl: !!js process.env.DSH_WEB_BRIDGE_URL ?? ''
+    runToken: !!js process.env.DSH_WEB_RUN_TOKEN ?? ''
+    requestTimeoutMs: 30000
+    maxResponseBytes: 4194304
+
+- id: tool-web-search
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    search: true
+    fetch: false
+    searchMaxResults: 10
+    searchTimeoutMs: 30000
+    fetchTimeoutMs: 30000
+    fetchMaxOutputChars: 200000
+
+# In-process children inherit the audited composition and support depth, tool,
+# persona, and structured-output constraints without another executable.
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+
+- id: subagent-spawn-in-process
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+  config:
+    providerName: spawn
+
+- id: subagent-fork-in-process
+  name: '@deepseek-ai/dsh-subagent-fork-in-process'
+  config:
+    providerName: fork
+
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    enableRunInBackground: false
+
+# Forked children inherit the parent's balanced completed-turn prefix. Keep
+# them one-shot so no reporting/control prompt is inserted before that prefix.
+- id: tool-subagent-fork
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: fork
+    toolName: subagent_fork
+    enableRunInBackground: false
+    backgroundMode: one-shot
+
+- id: tool-subagent-profiles
+  name: '@deepseek-ai/dsh-tool-subagent-profiles'
+  config:
+    provider: spawn
+    maxDepth: 3
+    profiles: !!js JSON.parse(process.env.DSH_SUBAGENT_PROFILES ?? '[]')
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# Native token accounting and context management keep long-running sessions
+# bounded while preserving durable reconstruction across process restarts.
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1
+
+- id: tool-result-pruner
+  name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+  config:
+    thresholdChars: 8192
+    headChars: 4096
+    tailChars: 1024

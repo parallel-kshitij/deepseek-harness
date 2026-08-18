@@ -56,6 +56,8 @@ export interface DeepSeekHarnessOptions {
   model?: string
   /** Maximum output tokens for each conversation-model request. */
   maxTokens?: number
+  /** Adapter-owned reasoning effort for SDK-created sessions. */
+  reasoningEffort?: string
 }
 
 /** One owned session activity interval, from enqueue receipt through idle. */
@@ -64,6 +66,10 @@ export interface RunResult {
   sessionId: string
   /** Concatenated text of the interval's last assistant message (empty when none). */
   finalResponse: string
+  /** Kind of the interval's last root `turn/end`, or undefined when none ended. */
+  finishReason?: string
+  /** Committed schema-valid value when this session configured an output schema. */
+  structuredOutput?: unknown
   /** Every `session.event` payload for the root session, in wire order. */
   events: SessionEvent[]
   /** Every notification for the root session and discovered descendants, in wire order. */

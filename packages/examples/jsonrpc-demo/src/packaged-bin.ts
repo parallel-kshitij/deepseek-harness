@@ -6,7 +6,7 @@
  * @module @deepseek-ai/dsh-sdk-jsonrpc-demo/packaged-bin
  */
 
-import { runJsonrpcAgent } from './runner.ts'
+import { runJsonrpcAgentOrExit } from './runner.ts'
 
 /* v8 ignore next -- exercised through the built Python runtime carriers */
-await runJsonrpcAgent(import.meta.url)
+await runJsonrpcAgentOrExit(import.meta.url)

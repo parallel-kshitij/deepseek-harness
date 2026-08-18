@@ -21,7 +21,7 @@ with DeepSeekHarness() as harness:
 
 `DeepSeekHarness` 会保留其按需启动的运行时子进程，以便在多次调用之间复用。请像上例一样将其用作上下文管理器，或在使用完毕后显式调用 `close()`。
 
-默认情况下，SDK 会启动 `deepseek-harness-runtime-bin` 包内置的单文件可执行程序 `dsh-jsonrpc-agent`，并通过 `DSH_CORDIS_CONFIG` 注入该包的默认配置，其中包括 stdio JSON-RPC 服务器、agent core（智能体核心）、预载的 DeepSeek 适配器、采用显式组合语义检查点策略的 JSONL 会话持久化，以及本地 bash。要运行自己的插件组合，请在配置中保留 `@deepseek-ai/dsh-sdk-jsonrpc-server` 配置项，并传入 Cordis 配置文件路径。
+默认情况下，SDK 会启动 `deepseek-harness-runtime-bin` 包内置的单文件可执行程序 `dsh-jsonrpc-agent`，并通过 `DSH_CORDIS_CONFIG` 注入该包的编码 agent 配置。该 profile 包含 stdio JSON-RPC 服务器、DeepSeek 适配器、沙箱 shell、工作区文件／搜索工具、指令与 skill 发现、本地附件、todo／goal／后台作业、进程内 subagent、JSONL 持久化与检查点、token 计量、压缩以及工具结果裁剪。要运行自己的插件组合，请在配置中保留 `@deepseek-ai/dsh-sdk-jsonrpc-server` 配置项，并传入 Cordis 配置文件路径。
 
 ```py
 from deepseek_harness import DeepSeekHarness
@@ -39,7 +39,34 @@ with DeepSeekHarness(
 
 [Python SDK 教程](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/python-sdk.md)提供一套无需使用 Web UI、按步骤完成安装和首次运行的流程。该教程所用的完整独立 Cordis 配置文件位于 [`jsonrpc-agent` 示例](https://github.com/deepseek-ai/deepseek-harness/blob/master/examples/jsonrpc-agent/README.md)中。
 
-`Session.run()` 的活动区间从其提示词被持久 inbox 接收时开始，到整个 agent 下一次进入空闲状态时结束，并返回 `RunResult(session_id, final_response, finish_reason, events, notifications, session_root)`。`final_response` 是该区间内根会话最后提交的助手文本。`finish_reason` 是该区间内根会话最后一个 `turn/end` 的 `kind`，例如 `completed`、`max-tokens` 或 `error`；没有轮次结束时为 `None`。缺少字符串 `data.reason.kind` 的 `turn/end` 违反运行时协议，并会抛出 `SdkProtocolError`。这两个结果字段描述的是 `Session.run()` 所界定的活动区间，并不表示某项输出或结束原因在因果上归属于该提示词。steering（中途引导）、注入的上下文和其他排队工作，也可能在 agent 进入空闲状态前参与这段活动。
+会话需要显式组合或持久化恢复时，请使用 `SessionConfig`：
+
+```py
+from deepseek_harness import DeepSeekHarness, SessionConfig
+
+schema = {
+    "type": "object",
+    "properties": {"answer": {"type": "number"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
+with DeepSeekHarness() as harness:
+    session = harness.start_session(
+        "analysis-42",
+        config=SessionConfig(
+            system_prompt="Return an exact numeric answer.",
+            allowed_tools=[],
+            output_schema=schema,
+        ),
+    )
+    result = session.run("What is six times seven?")
+    assert result.structured_output == {"answer": 42}
+```
+
+`Session.open()` 会在会话可被驱动前创建或恢复配置好的 Agent。`steer()` 用下一步引导唤醒它；`inject()` 排入上下文但不唤醒空闲 Agent；`cancel(keep_inbox=...)` 只中止该 Agent；`output()` 查询其已提交且通过 Schema 校验的值；`close()` 释放该会话，但不终止可复用运行时进程。
+
+`Session.run()` 的活动区间从其提示词被持久 inbox 接收时开始，到整个 agent 下一次进入空闲状态时结束，并返回 `RunResult(session_id, final_response, finish_reason, events, notifications, session_root, structured_output)`。`final_response` 是该区间内根会话最后提交的助手文本。`finish_reason` 是该区间内根会话最后一个 `turn/end` 的 `kind`，例如 `completed`、`max-tokens` 或 `error`；没有轮次结束时为 `None`。配置 Schema 时，`structured_output` 是权威提交值，否则为 `None`。缺少字符串 `data.reason.kind` 的 `turn/end` 违反运行时协议，并会抛出 `SdkProtocolError`。这些字段描述的是 `Session.run()` 所界定的活动区间，并不表示某项输出或结束原因在因果上归属于该提示词。steering（中途引导）、注入的上下文和其他排队工作，也可能在 agent 进入空闲状态前参与这段活动。
 
 `HarnessClient` 会在运行时进程的整个生命周期内保留已发现的 subagent 谱系。每次执行 `Session.run()` 时，`RunResult.notifications` 与 `on_notification` 会按协议传输顺序收到根会话及所有已知后代的通知，其中包括嵌套 subagent 的生命周期事件与会话事件。`RunResult.events` 只包含根会话事件，因此后代消息不会覆盖根会话回复。底层 `session_prompt()` 会立即返回已排队消息的 `MessageId`；绕过 `Session.run()` 的调用方必须自行负责后续的活动边界。
 
