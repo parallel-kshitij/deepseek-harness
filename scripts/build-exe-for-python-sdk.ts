@@ -445,6 +445,15 @@ class SingleExeBuild {
     }
     await mkdir(dirname(destination), { recursive: true })
     await copyFile(source, destination)
+    // node-pty's loader probes prebuilds/<platform>-<arch> BEFORE build/Release
+    // and, inside a pkg SEA snapshot, a miss there is fatal: the packaged
+    // runtime reported `Cannot find module './prebuilds/linux-x64/pty.node'`
+    // and the whole Cordis plugin tree failed to load, which surfaced far
+    // downstream as `initialize: no adapter registered`. Stage the addon in
+    // BOTH locations so the probe hits regardless of which branch runs.
+    const prebuild = join(this.staging, 'node_modules', 'node-pty', 'prebuilds', `linux-${target.arch}`, 'pty.node')
+    await mkdir(dirname(prebuild), { recursive: true })
+    await copyFile(source, prebuild)
   }
 
   /**
