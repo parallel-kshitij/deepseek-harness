@@ -247,7 +247,7 @@ describe('DeepSeekHarness', () => {
     // The child spawned under the temp worker dir (its physical cwd)...
     expect(identity.serverInfo.version).toBe(await realpath(inner))
     // This reply advertises no capabilities, so every feature reads false.
-    expect(identity.capabilities).toEqual({ subagentLinks: false })
+    expect(identity.capabilities).toEqual({ subagentLinks: false, attachments: false })
     // ...and the handshake wire cwd went out ABSOLUTE, so the child cannot
     // re-resolve a relative string into dir/worker/worker.
     const records = (await readFile(recordFile, 'utf8')).trim().split('\n')
@@ -576,7 +576,7 @@ describe('HarnessClient', () => {
     const client = new HarnessClient(fakeLaunch())
     cleanups.push(() => client.close())
     const identity = await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' })
-    expect(identity.capabilities).toEqual({ subagentLinks: true })
+    expect(identity.capabilities).toEqual({ subagentLinks: true, attachments: true })
 
     const tree = client.subscribeSessionTree('root')
     const inject = (method: string, params: Record<string, unknown>): void => {

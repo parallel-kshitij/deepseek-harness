@@ -41,6 +41,14 @@ export interface ServerCapabilities {
    * tool call started, and `subagent.finished` carries that call's `toolCallId`.
    */
   subagentLinks: boolean
+  /**
+   * The server's build loads `@deepseek-ai/dsh-attachment-local`, including
+   * its native image decoder in a packaged executable. A composition that
+   * enables that plugin serves durable `image` content blocks and the
+   * `read_image` tool. The value describes the build, not whether the current
+   * composition enabled the attachment store.
+   */
+  attachments: boolean
 }
 
 /** One user turn on one SDK session. */

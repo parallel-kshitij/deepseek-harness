@@ -152,7 +152,7 @@ export class HarnessSdkJsonRpcServer {
     }
     return {
       serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' },
-      capabilities: { subagentLinks: true },
+      capabilities: { subagentLinks: true, attachments: true },
     }
   }
 

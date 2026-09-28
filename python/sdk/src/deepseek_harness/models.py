@@ -30,6 +30,7 @@ class ServerInfo(BaseModel):
 
 class ServerCapabilities(BaseModel):
     subagentLinks: bool = False
+    attachments: bool = False
 
 
 class InitializeResponse(BaseModel):

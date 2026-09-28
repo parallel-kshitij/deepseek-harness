@@ -639,6 +639,10 @@ def test_initialize_response_reads_optional_server_capabilities() -> None:
     current = InitializeResponse.model_validate({"capabilities": {"subagentLinks": True}})
     assert current.capabilities is not None
     assert current.capabilities.subagentLinks is True
+    assert current.capabilities.attachments is False
+    attachments = InitializeResponse.model_validate({"capabilities": {"subagentLinks": True, "attachments": True}})
+    assert attachments.capabilities is not None
+    assert attachments.capabilities.attachments is True
 
 
 def test_session_subscription_preserves_reused_child_ancestry_after_late_finish() -> None:

@@ -194,7 +194,7 @@ reader.on('line', (line) => {
       }
       respond({
         serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' },
-        capabilities: { subagentLinks: true },
+        capabilities: { subagentLinks: true, attachments: true },
       })
       return
     case 'session/open': {

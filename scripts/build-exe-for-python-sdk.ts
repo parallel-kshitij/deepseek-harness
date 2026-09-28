@@ -37,7 +37,9 @@ const DEPLOY_ONLY_DOCS = ['README.md', 'README.zh.md', 'README.i18n.yaml']
 /**
  * Whole-tree assets cover Cordis's runtime bare-package imports, which pkg's
  * static analysis cannot see. Package manifests are explicit because bare-name
- * resolution depends on them.
+ * resolution depends on them. Linux shared objects carry an ABI version suffix
+ * (sharp's `libvips-cpp.so.8.18.3`), so `*.so.*` is listed beside `*.so`;
+ * without it a Linux executable cannot load `@deepseek-ai/dsh-attachment-local`.
  */
 const ASSET_GLOBS = [
   'package.json',
@@ -49,6 +51,7 @@ const ASSET_GLOBS = [
   'node_modules/**/*.node',
   'node_modules/**/*.dylib',
   'node_modules/**/*.so',
+  'node_modules/**/*.so.*',
   'node_modules/**/*.dll',
   'node_modules/**/*.wasm',
 ]

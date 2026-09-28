@@ -281,7 +281,10 @@ export class HarnessClient {
     }
     return {
       serverInfo: { name: result.serverInfo.name, version: result.serverInfo.version },
-      capabilities: { subagentLinks: isRecord(result.capabilities) && result.capabilities.subagentLinks === true },
+      capabilities: {
+        subagentLinks: isRecord(result.capabilities) && result.capabilities.subagentLinks === true,
+        attachments: isRecord(result.capabilities) && result.capabilities.attachments === true,
+      },
     }
   }
 

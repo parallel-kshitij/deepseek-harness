@@ -125,9 +125,9 @@ describe('HarnessSdkJsonRpcServer', () => {
         provider: 'deepseek-official',
         model: 'dsagent-model',
         maxTokens: 321,
-      }) as { serverInfo: { name: string }; capabilities: { subagentLinks: boolean } }
+      }) as { serverInfo: { name: string }; capabilities: { subagentLinks: boolean; attachments: boolean } }
       expect(init.serverInfo.name).toBe('deepseek-harness-sdk-runtime')
-      expect(init.capabilities).toEqual({ subagentLinks: true })
+      expect(init.capabilities).toEqual({ subagentLinks: true, attachments: true })
 
       const receipt = await server.handleRequest('session/prompt', {
         sessionId: 'main',

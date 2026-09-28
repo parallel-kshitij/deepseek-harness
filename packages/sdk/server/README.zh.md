@@ -22,7 +22,7 @@ Stdout 只承载 JSON-RPC 帧。部署不得组合 stdout logger；诊断应写�
 
 ## 协议说明
 
-`initialize.serverInfo.name` 的协议稳定值为 `deepseek-harness-sdk-runtime`，`initialize.capabilities.subagentLinks` 为 `true`：当 `subagent/start` 生命周期事件携带 `originCallId` 时，服务器发送以该 id 为 `toolCallId` 的 `subagent.linked`，配对的 `subagent.finished` 会重复该值。可选的正整数 `maxTokens` 与非空 `reasoningEffort` 成为进程默认值。`session/open` 可覆盖提供方、模型、输出上限与推理强度；安装精确的 agent 作用域系统提示词；限制继承／全局工具；附加以对象为根的 JSON Schema；并创建或恢复具名持久会话。工具运行时会校验限制：未知全局名称令会话创建失败，而 Schema 绑定的 `structured_output` 工具保留在会话本地，因此在显式允许列表下仍然可用。
+`initialize.serverInfo.name` 的协议稳定值为 `deepseek-harness-sdk-runtime`，`initialize.capabilities.subagentLinks` 为 `true`：当 `subagent/start` 生命周期事件携带 `originCallId` 时，服务器发送以该 id 为 `toolCallId` 的 `subagent.linked`，配对的 `subagent.finished` 会重复该值。`initialize.capabilities.attachments` 为 `true`：服务器的构建能够加载 `@deepseek-ai/dsh-attachment-local`，因此启用它的组合可提供 `read_image` 与持久 `image` 内容块；该值不报告当前组合是否启用了它。可选的正整数 `maxTokens` 与非空 `reasoningEffort` 成为进程默认值。`session/open` 可覆盖提供方、模型、输出上限与推理强度；安装精确的 agent 作用域系统提示词；限制继承／全局工具；附加以对象为根的 JSON Schema；并创建或恢复具名持久会话。工具运行时会校验限制：未知全局名称令会话创建失败，而 Schema 绑定的 `structured_output` 工具保留在会话本地，因此在显式允许列表下仍然可用。
 
 `session/prompt`、`session/steer` 与 `session/inject` 都返回持久 `{ messageId }` 回执。prompt 与 steer 会唤醒目标，inject 不会唤醒空闲 Agent。`session/cancel` 中止一个 Agent，并可选择保留其 inbox。`session/output` 读取已提交且通过 Schema 校验的值，`session/close` 则只移除并释放一个受管 Agent，不影响同级会话。服务器将每个持久事实作为 `session.event` 流式发出，并将整个 agent 生命周期的每次状态转换作为 `session.status` 发出；它不会把某条助手消息或 `turn/end` 归属于一条入队回执。持久化根目录和基础 persona 仍由 `cordis.yml` 提供。
 
