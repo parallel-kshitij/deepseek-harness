@@ -3,7 +3,7 @@ name: Build linux-x64 packaged carrier
 on:
   workflow_dispatch:
   push:
-    branches: [ci/build-linux-x64-carrier]
+    branches: [ci/build-linux-x64-carrier, feat/child-session-events]
 
 permissions:
   contents: read
