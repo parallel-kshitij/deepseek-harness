@@ -392,6 +392,8 @@ export function apply(ctx: Context, config: Config): void {
           label: args.description,
           prompt: [{ type: 'text', text: args.prompt }] as ContentBlock[],
           parent,
+          // Hosts attribute the child's lifecycle edges to this model call.
+          originCallId: exec.callId,
           ...config.agentOptions !== undefined ? { agentOptions: config.agentOptions } : {},
           ...config.persona !== undefined ? { persona: config.persona } : {},
           ...config.toolFilter !== undefined ? { toolFilter: config.toolFilter } : {},

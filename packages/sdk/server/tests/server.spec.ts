@@ -1,4 +1,4 @@
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -94,6 +94,7 @@ async function settleSubagent(
       parent,
       prompt: [],
       signal: new AbortController().signal,
+      ...info.originCallId === undefined ? {} : { originCallId: info.originCallId },
     })
     await beforeSettle?.()
     if (info.lastAssistantMessage === undefined) {
@@ -124,8 +125,9 @@ describe('HarnessSdkJsonRpcServer', () => {
         provider: 'deepseek-official',
         model: 'dsagent-model',
         maxTokens: 321,
-      }) as { serverInfo: { name: string } }
+      }) as { serverInfo: { name: string }; capabilities: { subagentLinks: boolean } }
       expect(init.serverInfo.name).toBe('deepseek-harness-sdk-runtime')
+      expect(init.capabilities).toEqual({ subagentLinks: true })
 
       const receipt = await server.handleRequest('session/prompt', {
         sessionId: 'main',
@@ -554,6 +556,78 @@ describe('HarnessSdkJsonRpcServer', () => {
           stopReason: 'error',
         },
       })
+
+      await parentHandle.dispose()
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('links a tool-started local child to its origin call before it finishes', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-subagent-linked-'))
+    const ctx = await makeHarness(storageDir)
+    try {
+      const transport = new FakeTransport()
+      const server = new HarnessSdkJsonRpcServer(ctx, transport)
+      const parentHandle = await ctx.agents.create({
+        sessionId: SessionId('link-parent'),
+        meta: { cwd: storageDir },
+        agentOptions: { model: 'deepseek-official' },
+      })
+      const child = await parentHandle.agent.ctx.agents.create({
+        sessionId: SessionId('linked-child'),
+        meta: { cwd: storageDir, parentSession: SessionId('link-parent') },
+        agentOptions: { model: 'deepseek-official' },
+      })
+      const unlinkedChild = await parentHandle.agent.ctx.agents.create({
+        sessionId: SessionId('unlinked-child'),
+        meta: { cwd: storageDir, parentSession: SessionId('link-parent') },
+        agentOptions: { model: 'deepseek-official' },
+      })
+
+      await settleSubagent(ctx, parentHandle.agent, {
+        provider: 'spawn',
+        id: SessionId('linked-child'),
+        localAgent: child.agent,
+        originCallId: CallId('parent-call-1'),
+        stopReason: 'completed',
+        lastAssistantMessage: [{ type: 'text', text: 'linked done' }],
+      }, () => child.dispose())
+      await settleSubagent(ctx, parentHandle.agent, {
+        provider: 'spawn',
+        id: SessionId('unlinked-child'),
+        localAgent: unlinkedChild.agent,
+        stopReason: 'completed',
+        lastAssistantMessage: [{ type: 'text', text: 'unlinked done' }],
+      }, () => unlinkedChild.dispose())
+      await settleSubagent(ctx, parentHandle.agent, {
+        provider: 'remote',
+        id: SessionId('remote-linked-run'),
+        localAgent: undefined,
+        originCallId: CallId('parent-call-2'),
+        stopReason: 'completed',
+        lastAssistantMessage: [],
+      })
+
+      const lineage = transport.notifications
+        .filter(notification => notification.method.startsWith('subagent.'))
+        .filter(notification => notification.params?.childSessionId === 'linked-child')
+      expect(lineage.map(notification => notification.method))
+        .toEqual(['subagent.started', 'subagent.linked', 'subagent.finished'])
+      expect(lineage[1]).toEqual({
+        method: 'subagent.linked',
+        params: { parentSessionId: 'link-parent', childSessionId: 'linked-child', toolCallId: 'parent-call-1' },
+      })
+      expect(lineage[2]?.params?.toolCallId).toBe('parent-call-1')
+      // Unlinked and remote runs send no link, and the unlinked finish omits the call.
+      expect(transport.notifications.filter(notification => notification.method === 'subagent.linked'))
+        .toHaveLength(1)
+      const unlinkedFinish = transport.notifications.find(notification =>
+        notification.method === 'subagent.finished' && notification.params?.childSessionId === 'unlinked-child')
+      expect(unlinkedFinish?.params).toBeDefined()
+      expect('toolCallId' in unlinkedFinish!.params!).toBe(false)
 
       await parentHandle.dispose()
       await server.shutdown()
@@ -1137,6 +1211,6 @@ describe('HarnessSdkJsonRpcServer', () => {
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
     await expect(server.shutdown()).rejects.toBe(listenerFailure)
-    expect(on).toHaveBeenCalledTimes(4)
+    expect(on).toHaveBeenCalledTimes(5)
   })
 })

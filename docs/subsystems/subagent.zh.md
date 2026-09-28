@@ -34,7 +34,7 @@ interface SubagentCapabilities {
 
 ## 单次启动请求
 
-工具层根据模型输入和自身配置构建此请求；服务在 `start` 之前针对指定提供方进行校验。必填的 `parent` 提供会话 cwd、谱系与委派深度。可选的 output schema、depth、工具过滤器和 persona 需要对应的能力 flag 匹配。不支持的 schema 在启动时即失败；进程内后端将 filter 和 persona 的作用域限定在子 agent 创建阶段，并通过强制 capture 工具实现所支持的 object-rooted schema。
+工具层根据模型输入和自身配置构建此请求；服务在 `start` 之前针对指定提供方进行校验。必填的 `parent` 提供会话 cwd、谱系与委派深度。可选的 output schema、depth、工具过滤器和 persona 需要对应的能力 flag 匹配。不支持的 schema 在启动时即失败；进程内后端将 filter 和 persona 的作用域限定在子 agent 创建阶段，并通过强制 capture 工具实现所支持的 object-rooted schema。可选的 `originCallId` 标识请求该委派的模型工具调用；它只供观察，仅出现在该运行的 `subagent/start` 与 `subagent/end` 载荷上。
 
 ```ts type-equiv
 /**
@@ -63,6 +63,14 @@ interface SubagentStartRequest {
    * remaining turn work when it fires afterward.
    */
   readonly signal: AbortSignal
+  /**
+   * The model tool call that requested this delegation, when a tool started
+   * it. Observe-only: the service copies it onto the run's `subagent/start`
+   * and `subagent/end` payloads so hosts can attribute the child to that call.
+   * It is never model-visible or persisted, and providers do not act on it.
+   * Continuable children ignore it.
+   */
+  readonly originCallId?: CallId
   readonly agentOptions?: AgentOptions
   /**
    * Object-rooted JSON Schema within `assertObjectJsonSchema`'s enforced subset. Start rejects

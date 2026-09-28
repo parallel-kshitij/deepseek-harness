@@ -16,6 +16,7 @@ export type {
   InitializeParams,
   InitializeResult,
   SdkRunStatus,
+  ServerCapabilities,
   SessionEventNotification,
   SessionCancelParams,
   SessionCloseResult,
@@ -29,5 +30,6 @@ export type {
   SessionPromptParams,
   SessionPromptResult,
   SubagentFinishedNotification,
+  SubagentLinkedNotification,
   SubagentStartedNotification,
 } from './types.ts'

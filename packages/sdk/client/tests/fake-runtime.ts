@@ -192,7 +192,10 @@ reader.on('line', (line) => {
         respond({ serverInfo: { name: 'deepseek-harness-sdk-runtime', version: process.cwd() } })
         return
       }
-      respond({ serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } })
+      respond({
+        serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' },
+        capabilities: { subagentLinks: true },
+      })
       return
     case 'session/open': {
       const sessionId = sessionIdOf(frame.params)

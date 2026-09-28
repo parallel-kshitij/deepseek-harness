@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { type Agent } from '@deepseek-ai/dsh-agent'
 
-import { HarnessError } from '@deepseek-ai/dsh-llm'
+import { CallId, HarnessError } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
 import SubagentRuntime, {
   foldSubagentDescriptor,
@@ -16,6 +16,7 @@ import SubagentRuntime, {
   type SubagentResult,
   type SubagentRun,
   type SubagentRunEndInfo,
+  type SubagentRunInfo,
   type SubagentStartRequest,
 } from '@deepseek-ai/dsh-subagent'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -215,6 +216,25 @@ describe('SubagentRuntime', () => {
     expect(events).toEqual(['start', 'end'])
     expect(keys).toEqual([parent, parent])
     expect(runIds[0]).toBe(runIds[1])
+  })
+
+  it('carries the requesting tool call on both lifecycle edges only when the request names one', async () => {
+    const { ctx, subagents } = await service()
+    subagents.registerProvider(new StubProvider('origin'))
+    const starts: SubagentRunInfo[] = []
+    const ends: SubagentRunEndInfo[] = []
+    ctx.on('subagent/start', info => void starts.push(info))
+    ctx.on('subagent/end', info => void ends.push(info))
+
+    const linked = await subagents.start('origin', baseRequest({ originCallId: CallId('call-7') }))
+    const unlinked = await subagents.start('origin', baseRequest())
+    await Promise.all([linked.result, unlinked.result])
+    await Promise.resolve()
+
+    expect(starts.map(info => info.originCallId)).toEqual([CallId('call-7'), undefined])
+    expect(ends.map(info => info.originCallId)).toEqual([CallId('call-7'), undefined])
+    expect('originCallId' in starts[1]!).toBe(false)
+    expect('originCallId' in ends[1]!).toBe(false)
   })
 
   it('mints distinct lifecycle identities when provider and child ids repeat', async () => {

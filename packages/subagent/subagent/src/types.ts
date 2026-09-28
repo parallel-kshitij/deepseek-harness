@@ -11,7 +11,7 @@
 
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { CallId, ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { ObjectJsonSchema, ToolRestriction } from '@deepseek-ai/dsh-tools'
 import type { SubagentDescriptorData } from './descriptor.ts'
@@ -47,6 +47,12 @@ export interface SubagentRunInfo {
   readonly id: SessionId
   /** Snapshot of whether `SubagentRun.localAgent` was present when start fulfilled. */
   readonly local: boolean
+  /**
+   * The parent tool call that requested this one-shot run
+   * ({@link SubagentStartRequest.originCallId}); absent when the start request
+   * named none and for every continuable Activation epoch.
+   */
+  readonly originCallId?: CallId
 }
 
 /**
@@ -62,6 +68,8 @@ export interface SubagentRunEndInfo {
   readonly id: SessionId
   /** Snapshot of whether `SubagentRun.localAgent` was present when start fulfilled. */
   readonly local: boolean
+  /** The same origin call carried by the paired start event, when present. */
+  readonly originCallId?: CallId
   /** The terminal stop reason. */
   readonly stopReason: SubagentResult['stopReason']
   /**
@@ -116,6 +124,14 @@ export interface SubagentStartRequest {
    * remaining turn work when it fires afterward.
    */
   readonly signal: AbortSignal
+  /**
+   * The model tool call that requested this delegation, when a tool started
+   * it. Observe-only: the service copies it onto the run's `subagent/start`
+   * and `subagent/end` payloads so hosts can attribute the child to that call.
+   * It is never model-visible or persisted, and providers do not act on it.
+   * Continuable children ignore it.
+   */
+  readonly originCallId?: CallId
   readonly agentOptions?: AgentOptions
   /**
    * Object-rooted JSON Schema within `assertObjectJsonSchema`'s enforced subset. Start rejects

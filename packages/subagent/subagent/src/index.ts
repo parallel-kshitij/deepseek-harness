@@ -422,7 +422,7 @@ export class SubagentRuntime extends Service {
       ...request.label !== undefined ? { label: request.label } : {},
     })
     const resolved: ResolvedSubagentStartRequest = { ...request, descriptor }
-    return observeRun(this.emitLifecycle, name, request.parent, await provider.start(resolved))
+    return observeRun(this.emitLifecycle, name, request.parent, await provider.start(resolved), request.originCallId)
   }
 
   /**

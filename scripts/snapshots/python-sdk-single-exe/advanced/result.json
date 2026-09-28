@@ -2775,6 +2775,14 @@
       }
     },
     {
+      "method": "subagent.linked",
+      "payload": {
+        "parentSessionId": "{{parent}}",
+        "childSessionId": "{{child-1}}",
+        "toolCallId": "advanced-direct-child"
+      }
+    },
+    {
       "method": "session.event",
       "payload": {
         "sessionId": "{{child-1}}",
@@ -3144,7 +3152,8 @@
             "type": "text",
             "text": "DIRECT_CHILD_OK"
           }
-        ]
+        ],
+        "toolCallId": "advanced-direct-child"
       }
     },
     {

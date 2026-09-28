@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { CallId, ContentBlock } from '@deepseek-ai/dsh-llm'
 import { foldConsumedWork } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { finalAssistantOutput } from './assistant-output.ts'
@@ -128,6 +128,7 @@ export function createLifecycleEmitter(
  * @param provider - the provider that established the run.
  * @param parent - the delegating parent keying scoped dispatch.
  * @param run - the published run whose settlement closes the pair.
+ * @param originCallId - the requesting tool call, carried by both edges when present.
  * @returns the same run, unchanged.
  */
 export function observeRun(
@@ -135,12 +136,14 @@ export function observeRun(
   provider: string,
   parent: Agent,
   run: SubagentRun,
+  originCallId: CallId | undefined,
 ): SubagentRun {
   const identity = {
     runId: SubagentRunId(randomUUID()),
     provider,
     id: run.id,
     local: run.localAgent !== undefined,
+    ...originCallId === undefined ? {} : { originCallId },
   }
   // Attach the terminal observer before dispatching start. Promise reactions
   // still run after this synchronous start emission, preserving start → end.

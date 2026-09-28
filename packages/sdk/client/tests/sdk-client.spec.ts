@@ -246,6 +246,8 @@ describe('DeepSeekHarness', () => {
     await harness.close()
     // The child spawned under the temp worker dir (its physical cwd)...
     expect(identity.serverInfo.version).toBe(await realpath(inner))
+    // This reply advertises no capabilities, so every feature reads false.
+    expect(identity.capabilities).toEqual({ subagentLinks: false })
     // ...and the handshake wire cwd went out ABSOLUTE, so the child cannot
     // re-resolve a relative string into dir/worker/worker.
     const records = (await readFile(recordFile, 'utf8')).trim().split('\n')
@@ -566,6 +568,29 @@ describe('HarnessClient', () => {
     expect((await tree.next()).method).toBe('subagent.finished')
     // The foreign-root edge and stranger event were filtered; next is the root-child edge.
     expect((await tree.next()).params.childSessionId).toBe('root')
+    tree.close()
+    await client.close()
+  })
+
+  it('delivers tool-call links for descendants and filters foreign links', async () => {
+    const client = new HarnessClient(fakeLaunch())
+    cleanups.push(() => client.close())
+    const identity = await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' })
+    expect(identity.capabilities).toEqual({ subagentLinks: true })
+
+    const tree = client.subscribeSessionTree('root')
+    const inject = (method: string, params: Record<string, unknown>): void => {
+      (client as unknown as { dispatchNotification(n: HarnessNotification): void }).dispatchNotification({ method, params })
+    }
+    inject('subagent.started', { parentSessionId: 'root', childSessionId: 'child' })
+    inject('subagent.linked', { parentSessionId: 'other-root', childSessionId: 'other-child', toolCallId: 'foreign' })
+    inject('subagent.linked', { parentSessionId: 'root', childSessionId: 'child', toolCallId: 'call-1' })
+
+    expect((await tree.next()).method).toBe('subagent.started')
+    expect(await tree.next()).toEqual({
+      method: 'subagent.linked',
+      params: { parentSessionId: 'root', childSessionId: 'child', toolCallId: 'call-1' },
+    })
     tree.close()
     await client.close()
   })

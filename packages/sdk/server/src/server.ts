@@ -13,7 +13,7 @@ import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf, type Scoped } from '@deepseek-ai/dsh-scope'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
-import type { SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
+import type { SubagentRunEndInfo, SubagentRunInfo } from '@deepseek-ai/dsh-subagent'
 import {
   attachStructuredRuntime,
   type StructuredAttachment,
@@ -37,6 +37,7 @@ import type {
   SessionPromptResult,
   SessionTargetParams,
   SubagentFinishedNotification,
+  SubagentLinkedNotification,
   SubagentStartedNotification,
 } from '@deepseek-ai/dsh-sdk-protocol'
 
@@ -101,6 +102,17 @@ export class HarnessSdkJsonRpcServer {
       }
       this.transport.notify('subagent.started', payload)
     }))
+    this.disposers.push(ctx.on('subagent/start', function (this: Scoped<SubagentRuntime>, info: SubagentRunInfo) {
+      // The same locality rule as `subagent.finished`; a run no tool call
+      // started has nothing to link.
+      if (!info.local || info.originCallId === undefined) return
+      const payload: SubagentLinkedNotification = {
+        parentSessionId: String(subagentParentOf(this).session.id),
+        childSessionId: String(info.id),
+        toolCallId: String(info.originCallId),
+      }
+      transport.notify('subagent.linked', payload)
+    }))
     this.disposers.push(ctx.on('subagent/end', function (this: Scoped<SubagentRuntime>, info: SubagentRunEndInfo) {
       const parent = subagentParentOf(this)
       // This protocol reports only in-process child sessions. The service
@@ -115,6 +127,7 @@ export class HarnessSdkJsonRpcServer {
         status: successStatus(info.stopReason, serverOptions),
         stopReason: info.stopReason,
         ...(info.lastAssistantMessage === undefined ? {} : { lastAssistantMessage: info.lastAssistantMessage }),
+        ...(info.originCallId === undefined ? {} : { toolCallId: String(info.originCallId) }),
       }
       transport.notify('subagent.finished', payload)
     }))
@@ -137,7 +150,10 @@ export class HarnessSdkJsonRpcServer {
       if (this.provider !== 'deepseek-official') throw new Error(`no adapter registered for provider "${this.provider}"`)
       this.llmFiber = await this.ctx.plugin(LlmDeepSeek, {})
     }
-    return { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } }
+    return {
+      serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' },
+      capabilities: { subagentLinks: true },
+    }
   }
 
   /**

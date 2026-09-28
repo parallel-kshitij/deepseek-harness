@@ -1,6 +1,6 @@
 /**
  * Named wire types for the DeepSeek Harness SDK runtime protocol: the typed
- * request/result pairs and the four server-to-client notification payloads
+ * request/result pairs and the five server-to-client notification payloads
  * exchanged over the newline-delimited JSON-RPC stdio transport. The server
  * plugin (`@deepseek-ai/dsh-sdk-jsonrpc-server`) and SDK clients share these shapes;
  * `serverInfo.name` stays the wire-stable `deepseek-harness-sdk-runtime`.
@@ -30,6 +30,17 @@ export interface InitializeParams {
 export interface InitializeResult {
   /** Wire-stable server identity (`deepseek-harness-sdk-runtime`) and version. */
   serverInfo: { name: string; version: string }
+  /** Optional protocol features this server emits. */
+  capabilities: ServerCapabilities
+}
+
+/** Optional protocol features a server advertises at initialization. */
+export interface ServerCapabilities {
+  /**
+   * The server sends `subagent.linked` for every in-process one-shot child a
+   * tool call started, and `subagent.finished` carries that call's `toolCallId`.
+   */
+  subagentLinks: boolean
 }
 
 /** One user turn on one SDK session. */
@@ -147,6 +158,22 @@ export interface SubagentStartedNotification {
   childSessionId: string
 }
 
+/**
+ * `subagent.linked` payload: an in-process one-shot child was published for a
+ * parent tool call. Sent after that child's `subagent.started` and before its
+ * `subagent.finished`; the child's earliest `session.event` notifications may
+ * precede it. Runs no tool call started, remote runs, and continuable children
+ * are not linked.
+ */
+export interface SubagentLinkedNotification {
+  /** The delegating session. */
+  parentSessionId: string
+  /** The child session. */
+  childSessionId: string
+  /** The delegating session's tool call (`tool/call` `callId`) that started the child. */
+  toolCallId: string
+}
+
 /** `subagent.finished` payload: an in-process subagent run ended (remote runs are not reported). */
 export interface SubagentFinishedNotification {
   /** Subagent provider name that ran the child. */
@@ -163,6 +190,8 @@ export interface SubagentFinishedNotification {
   stopReason: SubagentStopReason
   /** The child's selected assistant output; absent when the child produced none. */
   lastAssistantMessage?: ContentBlock[]
+  /** The tool call that started the child, as in {@link SubagentLinkedNotification}; absent when the run was not linked. */
+  toolCallId?: string
 }
 
 /** Server-to-client notifications by JSON-RPC method name. */
@@ -170,6 +199,7 @@ export interface HarnessSdkNotificationMap {
   'session.event': SessionEventNotification
   'session.status': SessionStatusNotification
   'subagent.started': SubagentStartedNotification
+  'subagent.linked': SubagentLinkedNotification
   'subagent.finished': SubagentFinishedNotification
 }
 

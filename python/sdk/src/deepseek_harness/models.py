@@ -28,8 +28,13 @@ class ServerInfo(BaseModel):
     version: str | None = None
 
 
+class ServerCapabilities(BaseModel):
+    subagentLinks: bool = False
+
+
 class InitializeResponse(BaseModel):
     serverInfo: ServerInfo | None = None
+    capabilities: ServerCapabilities | None = None
 
 
 class SessionOpenResponse(BaseModel):

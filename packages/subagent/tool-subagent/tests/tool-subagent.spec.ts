@@ -868,6 +868,40 @@ describe('dsh-tool-subagent background mode', () => {
     expect(text(again)).toBe('background answer\n[status: completed]')
   })
 
+  it('stamps the requesting tool call on foreground and one-shot background delegations', async () => {
+    const origins: (CallId | undefined)[] = []
+    const ctx = await backgroundSetup({ provider: 'mock' }, {
+      onStart: (request: SubagentStartRequest) => {
+        origins.push(request.originCallId)
+        return Promise.resolve()
+      },
+    })
+    const parent = ownerAgent(ctx, 'sess-parent')
+    const linked: (CallId | undefined)[] = []
+    ctx.on('subagent/start', info => void linked.push(info.originCallId))
+
+    const foreground = await ctx.tools.execute({
+      signal: testToolSignal,
+      callId: CallId('origin-foreground'),
+      name: 'subagent',
+      arguments: { description: 'fg', prompt: 'go' },
+      agent: parent,
+    })
+    expect(foreground.isError).toBe(false)
+    const background = await ctx.tools.execute({
+      signal: testToolSignal,
+      callId: CallId('origin-background'),
+      name: 'subagent',
+      arguments: { description: 'bg', prompt: 'go', run_in_background: true },
+      agent: parent,
+    })
+    expect(background.isError).toBe(false)
+    await vi.waitFor(() => { expect(origins).toHaveLength(2) })
+
+    expect(origins).toEqual([CallId('origin-foreground'), CallId('origin-background')])
+    await vi.waitFor(() => { expect(linked).toEqual(origins) })
+  })
+
   it('fails loud when the tasks runtime is not loaded', async () => {
     const ctx = await setup({ provider: 'mock' })
     const result = await callSubagent(ctx, { description: 'd', prompt: 'p', run_in_background: true })

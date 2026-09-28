@@ -29,6 +29,9 @@ from .models import (
 ModelT = TypeVar("ModelT", bound=BaseModel)
 NotificationFilter: TypeAlias = Callable[[Notification], bool]
 
+# Notifications addressed by a parent/child session pair rather than one sessionId.
+_LINEAGE_METHODS = frozenset({"subagent.started", "subagent.linked", "subagent.finished"})
+
 
 @dataclass(slots=True)
 class HarnessConfig:
@@ -551,7 +554,7 @@ class HarnessClient:
     def _notification_belongs_to_session_tree(self, session_id: str) -> NotificationFilter:
         def belongs(notification: Notification) -> bool:
             payload = notification.payload
-            if notification.method in {"subagent.started", "subagent.finished"}:
+            if notification.method in _LINEAGE_METHODS:
                 parent_id = payload.get("parentSessionId")
                 if (
                     isinstance(parent_id, str)

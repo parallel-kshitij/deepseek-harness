@@ -13,6 +13,7 @@ from deepseek_harness import (
     DeepSeekHarness,
     HarnessClient,
     HarnessConfig,
+    InitializeResponse,
     Notification,
     SdkProtocolError,
     SessionConfig,
@@ -599,6 +600,45 @@ def test_session_subscription_keeps_descendant_relationships_across_subscription
         assert second.next().payload["sessionId"] == "grandchild"
 
     assert client._notifications.qsize() == 0
+
+
+def test_session_subscription_delivers_descendant_tool_call_links_only() -> None:
+    client = HarnessClient()
+    with client.subscribe_session_notifications("main") as subscription:
+        client._handle_message({
+            "jsonrpc": "2.0",
+            "method": "subagent.started",
+            "params": {"parentSessionId": "main", "childSessionId": "child"},
+        })
+        client._handle_message({
+            "jsonrpc": "2.0",
+            "method": "subagent.linked",
+            "params": {"parentSessionId": "other", "childSessionId": "foreign", "toolCallId": "x"},
+        })
+        client._handle_message({
+            "jsonrpc": "2.0",
+            "method": "subagent.linked",
+            "params": {"parentSessionId": "main", "childSessionId": "child", "toolCallId": "call-1"},
+        })
+        seen: list[Notification] = []
+        subscription.drain(seen.append)
+        assert [notification.method for notification in seen] == [
+            "subagent.started",
+            "subagent.linked",
+        ]
+        assert seen[1].payload["toolCallId"] == "call-1"
+
+    assert client._notifications.qsize() == 1
+    foreign = client._notifications.get_nowait()
+    assert not isinstance(foreign, BaseException)
+    assert foreign.payload["childSessionId"] == "foreign"
+
+
+def test_initialize_response_reads_optional_server_capabilities() -> None:
+    assert InitializeResponse.model_validate({"serverInfo": {"name": "old"}}).capabilities is None
+    current = InitializeResponse.model_validate({"capabilities": {"subagentLinks": True}})
+    assert current.capabilities is not None
+    assert current.capabilities.subagentLinks is True
 
 
 def test_session_subscription_preserves_reused_child_ancestry_after_late_finish() -> None:

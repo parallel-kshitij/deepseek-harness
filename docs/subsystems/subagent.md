@@ -34,7 +34,7 @@ interface SubagentCapabilities {
 
 ## The one-shot start request
 
-The tool layer builds this request from the model input and its own config; the service validates it against the named provider before `start`. Required `parent` supplies the session cwd, lineage, and delegation depth. Optional output schema, depth, tool filter, and persona require matching capability flags. Unsupported schemas fail at start; in-process backends scope filters and personas to child creation and implement the supported object-rooted schema with a forced capture tool.
+The tool layer builds this request from the model input and its own config; the service validates it against the named provider before `start`. Required `parent` supplies the session cwd, lineage, and delegation depth. Optional output schema, depth, tool filter, and persona require matching capability flags. Unsupported schemas fail at start; in-process backends scope filters and personas to child creation and implement the supported object-rooted schema with a forced capture tool. Optional `originCallId` names the model tool call that requested the delegation; it is observe-only and reaches only the run's `subagent/start` and `subagent/end` payloads.
 
 ```ts type-equiv
 /**
@@ -63,6 +63,14 @@ interface SubagentStartRequest {
    * remaining turn work when it fires afterward.
    */
   readonly signal: AbortSignal
+  /**
+   * The model tool call that requested this delegation, when a tool started
+   * it. Observe-only: the service copies it onto the run's `subagent/start`
+   * and `subagent/end` payloads so hosts can attribute the child to that call.
+   * It is never model-visible or persisted, and providers do not act on it.
+   * Continuable children ignore it.
+   */
+  readonly originCallId?: CallId
   readonly agentOptions?: AgentOptions
   /**
    * Object-rooted JSON Schema within `assertObjectJsonSchema`'s enforced subset. Start rejects

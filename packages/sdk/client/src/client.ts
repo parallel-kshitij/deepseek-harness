@@ -34,6 +34,9 @@ const STDERR_TAIL_LIMIT = 400
 /** Grace for the runtime's stdio streams to settle after its exit edge. */
 const STREAM_SETTLE_MS = 100
 
+/** Notifications addressed by a parent/child session pair rather than one `sessionId`. */
+const LINEAGE_METHODS: ReadonlySet<string> = new Set(['subagent.started', 'subagent.linked', 'subagent.finished'])
+
 /**
  * The runtime subprocess is gone or unusable: it exited, its stdio closed, or
  * it was never launchable. The message carries the exit code and a stderr
@@ -267,7 +270,8 @@ export class HarnessClient {
   /**
    * Perform the process-wide handshake.
    * @param params - workspace cwd plus the provider/model route.
-   * @returns the runtime's wire identity.
+   * @returns the runtime's wire identity and advertised protocol features; a
+   *   feature the runtime does not advertise as `true` reads `false`.
    */
   async initialize(params: InitializeParams): Promise<InitializeResult> {
     const result = await this.request('initialize', { ...params })
@@ -275,7 +279,10 @@ export class HarnessClient {
       || typeof result.serverInfo.name !== 'string' || typeof result.serverInfo.version !== 'string') {
       throw new SdkProtocolError(`initialize returned no server identity: ${JSON.stringify(result)}`)
     }
-    return { serverInfo: { name: result.serverInfo.name, version: result.serverInfo.version } }
+    return {
+      serverInfo: { name: result.serverInfo.name, version: result.serverInfo.version },
+      capabilities: { subagentLinks: isRecord(result.capabilities) && result.capabilities.subagentLinks === true },
+    }
   }
 
   /**
@@ -446,7 +453,8 @@ export class HarnessClient {
 
   /**
    * Subscribe to one session and the descendants discovered from
-   * `subagent.started` lineage edges (the runtime notifies for every session
+   * `subagent.started` lineage edges, including their `subagent.linked` and
+   * `subagent.finished` notifications (the runtime notifies for every session
    * in its context; scoping is client-side, mirroring the Python SDK).
    * @param sessionId - the root session id.
    * @returns the filtered subscription handle.
@@ -454,7 +462,7 @@ export class HarnessClient {
   subscribeSessionTree(sessionId: string): NotificationSubscription {
     return this.subscribe((notification) => {
       const params = notification.params
-      if (notification.method === 'subagent.started' || notification.method === 'subagent.finished') {
+      if (LINEAGE_METHODS.has(notification.method)) {
         const parentId = params.parentSessionId
         if (typeof parentId === 'string' && this.isDescendantOf(parentId, sessionId)) return true
         return params.childSessionId === sessionId
